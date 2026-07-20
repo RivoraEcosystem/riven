@@ -1,0 +1,14 @@
+project_files/
+cert.pem
+key.pem
+test.py
+dev_logs/
+
+__pycache__/
+*.py[cod]
+*$py.class
+rivenenv/
+.env
+Logs/
+.vscode/
+known_bugs.py
