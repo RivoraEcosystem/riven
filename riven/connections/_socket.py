@@ -8,15 +8,23 @@ from aioquic.quic.events import (
 )
 from aioquic.h3.events import (
     HeadersReceived,
-    DataReceived
+    DataReceived,
+    H3Event
 )
 from aioquic.h3.connection import (
     H3_ALPN,
     H3Connection
 )
+from rcp import (
+    HTTPScope,
+    ScopeType,
+    HTTPVersions
+)
+from rcp.rcp import RCPVersions
+from rcp.methods import RequestMethod
+
 from ..server import Riven
 from ._stream_utils import HTTPStreamContext
-import enum
 import asyncio
 
 class RivenConnection(QuicConnectionProtocol):
@@ -40,4 +48,9 @@ class RivenConnection(QuicConnectionProtocol):
             for http_event in self._http.handle_event(event):
                 asyncio.create_task(self.handle_h3_event(http_event))
 
-        
+
+    async def handle_h3_event(self,event:H3Event):
+        if isinstance(event,HeadersReceived):
+            await self.handle_headers(event)
+        elif isinstance(event,DataReceived):
+            await self.handle_data_received(event)
