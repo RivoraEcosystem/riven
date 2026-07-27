@@ -11,6 +11,7 @@ from _connection_utils import ConnectionInfo
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ._socket import RivenConnection
+from dataclasses import dataclass
 
 
 class HTTPStreamContext:
@@ -49,7 +50,7 @@ class HTTPStreamContext:
 
         await self._request_queue.put(self.EOF)
         await self._request_queue.shutdown(immediate=False)
-        self.request_forwarded = True
+        self.request_complete = True
 
     async def _pop_request(self) -> RCPReceiveEvent | None:
         "Read from request queue buffer to free up queue"
