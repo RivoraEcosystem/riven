@@ -18,13 +18,15 @@ from aioquic.h3.connection import (
 from rcp import (
     HTTPScope,
     ScopeType,
-    HTTPVersions
+    HTTPVersions,
+    RCPReceiveEvent,
+    HTTPRequestEvent
 )
 from rcp.rcp import RCPVersions
 from rcp.methods import RequestMethod
 from rcp.scheme import HTTPScheme
 from ..server import Riven
-from ._stream_utils import HTTPStreamContext
+from ._stream_utils import HTTPStreamContext , ConnectionInfo
 import asyncio
 from ..exceptions import exceptions
 from typing import Any
@@ -53,16 +55,16 @@ class RivenConnection(QuicConnectionProtocol):
 
     async def handle_h3_event(self,event:H3Event):
         if isinstance(event,HeadersReceived):
-            await self.handle_headers(event)
+            await self._create_stream(event=event,state=self._manager.state,extensions=self._manager.extensions)
         elif isinstance(event,DataReceived):
             await self.handle_data_received(event)
 
-    async def handle_headers(
+    async def _create_stream(
             self,
             event:H3Event,
             state:dict[str,Any] | None = None,
             extensions:dict[str, dict[object, object]] | None = None
-            ) -> HTTPScope:
+            ) -> None:
         """Parse pseudo headers of H3 Events and create HTTPScope"""
         if not isinstance(event,HeadersReceived):
             raise exceptions.InvalidEvent(event)
@@ -108,7 +110,7 @@ class RivenConnection(QuicConnectionProtocol):
             elif name == b":path":
                 if raw_target is not None:
                     raise exceptions.DuplicatePseudoHeader(":path")
-                if not value.startswith(b"/"):
+                if value != b"*" and not value.startswith(b"/"): # Reject invalid path values except / and *
                     raise exceptions.InvalidPath(value)
                 raw_target = value
 
@@ -123,6 +125,9 @@ class RivenConnection(QuicConnectionProtocol):
 
         if scheme is None:
             raise exceptions.InvalidScheme()
+
+        if authority is None:
+            raise exceptions.InvalidAuthority()
 
         if raw_target is None:
             raise exceptions.InvalidPath()
@@ -158,4 +163,24 @@ class RivenConnection(QuicConnectionProtocol):
         if extensions is not None:
             http_scope['extensions'] = extensions
 
-        return http_scope
+        stream_context = HTTPStreamContext( # build http stream context
+            connection=ConnectionInfo(
+                stream_id=event.stream_id,
+                server=server,
+                client=client,
+            ),
+            stream_id=event.stream_id,
+            method=method,
+            scheme=scheme,
+            http_version=HTTPVersions.HTTP3,
+            protocol=self
+        )
+
+        try:
+            task = await self._manager._start_rcp_application(http_scope,stream_context)
+        except Exception:
+            await stream_context.close()
+            raise
+
+        stream_context.task = task
+        self._active_streams[event.stream_id] = stream_context

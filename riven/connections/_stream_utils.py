@@ -36,8 +36,8 @@ class HTTPStreamContext:
 
         self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=10)
 
-        self.request_forwarded = False
-        self.closed = False
+        self._request_complete = False
+        self._closed = False
         self.task: asyncio.Task[None] | None = None # stores task of Rcp application
 
     async def _push_request(self, data:RCPReceiveEvent) -> None:
@@ -45,12 +45,12 @@ class HTTPStreamContext:
 
         await self._request_queue.put(data)
 
-    async def _request_complete(self) -> None:
+    async def _finish_request(self) -> None:
         "Add none at last to mark request data ending"
 
         await self._request_queue.put(self.EOF)
         await self._request_queue.shutdown(immediate=False)
-        self.request_complete = True
+        self._request_complete = True
 
     async def _pop_request(self) -> RCPReceiveEvent | None:
         "Read from request queue buffer to free up queue"
@@ -73,9 +73,20 @@ class HTTPStreamContext:
         return await self._pop_request()
 
     async def close(self):
-        self.closed = True  
+        if self._closed:
+            return
+
+        self._closed = True
 
         if self.task is not None and not self.task.done(): # prevent canceling alraedy canclled or completed task
             self.task.cancel()
 
         await self._request_queue.shutdown(immediate=True) # shutdown queue immediately
+
+    @property
+    def is_closed(self):
+        return self._closed
+
+    @property
+    def _request_complete(self):
+        return self._request_complete
