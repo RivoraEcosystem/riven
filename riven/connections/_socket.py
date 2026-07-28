@@ -22,10 +22,12 @@ from rcp import (
 )
 from rcp.rcp import RCPVersions
 from rcp.methods import RequestMethod
-
+from rcp.scheme import HTTPScheme
 from ..server import Riven
 from ._stream_utils import HTTPStreamContext
 import asyncio
+from ..exceptions import exceptions
+from typing import Any
 
 class RivenConnection(QuicConnectionProtocol):
     def __init__(self ,manager:Riven ,*args ,**kwargs):
@@ -54,3 +56,106 @@ class RivenConnection(QuicConnectionProtocol):
             await self.handle_headers(event)
         elif isinstance(event,DataReceived):
             await self.handle_data_received(event)
+
+    async def handle_headers(
+            self,
+            event:H3Event,
+            state:dict[str,Any] | None = None,
+            extensions:dict[str, dict[object, object]] | None = None
+            ) -> HTTPScope:
+        """Parse pseudo headers of H3 Events and create HTTPScope"""
+        if not isinstance(event,HeadersReceived):
+            raise exceptions.InvalidEvent(event)
+
+        method = None
+        scheme = None
+        raw_target = None
+        headers = []
+        authority = None
+
+        # Iterate instead of using dict() to preserve duplicate HTTP headers
+        # while validating pseudo-headers individually.
+        for name, value in event.headers:
+
+            if name == b":method":
+                if method is not None:
+                    raise exceptions.DuplicatePseudoHeader(":method")
+                try:
+                    method = RequestMethod(value.decode("ascii"))
+                    # Reject CONNECT method
+                    if method == RequestMethod.CONNECT:
+                        raise exceptions.UnsupportedMethod("CONNECT")
+
+                except ValueError:
+                    raise exceptions.UnsupportedMethod(value.decode("ascii"))
+                
+            elif name == b":scheme":
+                if scheme is not None:
+                    raise exceptions.DuplicatePseudoHeader(":scheme")
+                try:
+                    scheme = HTTPScheme(value.decode("ascii"))
+                except ValueError:
+                    raise exceptions.InvalidScheme(value.decode("ascii"))
+                
+            elif name == b":authority":
+                if authority is not None:
+                    raise exceptions.DuplicatePseudoHeader(":authority")
+                try:
+                    authority = value.decode("ascii")
+                except UnicodeDecodeError:
+                    raise exceptions.InvalidAuthority(value)
+                
+            elif name == b":path":
+                if raw_target is not None:
+                    raise exceptions.DuplicatePseudoHeader(":path")
+                if not value.startswith(b"/"):
+                    raise exceptions.InvalidPath(value)
+                raw_target = value
+
+            elif name.startswith(b":"):
+                raise exceptions.InvalidPseudoHeader(name.decode("ascii", "replace"))
+            
+            else:
+                headers.append((name, value))
+
+        if method is None:
+            raise exceptions.UnsupportedMethod(None)
+
+        if scheme is None:
+            raise exceptions.InvalidScheme()
+
+        if raw_target is None:
+            raise exceptions.InvalidPath()
+
+        raw_path, _, query_string = raw_target.partition(b"?") # convert raw target to raw path and query string with '?'
+
+        try:
+            path = raw_path.decode("utf-8")
+        except UnicodeDecodeError:
+            raise exceptions.InvalidPath(raw_path)
+        
+        client = self._transport.get_extra_info("peername") # client info from _transport 
+        server = self._transport.get_extra_info("sockname") # server info from _transport
+
+        http_scope: HTTPScope = {
+            "type": ScopeType.HTTP,
+            "rcp": {"version": RCPVersions.VERSION_1},
+            "http_version": HTTPVersions.HTTP3,
+            "method": method,
+            "scheme": scheme,
+            "authority": authority,
+            "path": path,
+            "raw_path": raw_path,
+            "query_string": query_string,
+            "root_path": self._manager.root_path,
+            "headers": headers,
+            "client": client,
+            "server": server,
+        }
+        if state is not None:
+            http_scope['state'] = state
+
+        if extensions is not None:
+            http_scope['extensions'] = extensions
+
+        return http_scope
