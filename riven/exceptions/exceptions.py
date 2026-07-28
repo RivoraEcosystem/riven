@@ -91,3 +91,10 @@ class InvalidPath(RivenException):
             message = f"Invalid request path: {path!r}"
 
         super().__init__(message)
+
+class InvalidStreamContext(RivenException):
+    """Raised when an invalid object is stored as a stream context."""
+    def __init__(self, context:Any):
+        self.context = context
+
+        super().__init__(f"Unexpected StreamContext , got {type(context).__name__}")

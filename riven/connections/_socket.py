@@ -20,7 +20,8 @@ from rcp import (
     ScopeType,
     HTTPVersions,
     RCPReceiveEvent,
-    HTTPRequestEvent
+    HTTPRequestEvent,
+    HTTPConnectionEventType
 )
 from rcp.rcp import RCPVersions
 from rcp.methods import RequestMethod
@@ -57,7 +58,7 @@ class RivenConnection(QuicConnectionProtocol):
         if isinstance(event,HeadersReceived):
             await self._create_stream(event=event,state=self._manager.state,extensions=self._manager.extensions)
         elif isinstance(event,DataReceived):
-            await self.handle_data_received(event)
+            await self._handle_data_received(event)
 
     async def _create_stream(
             self,
@@ -65,7 +66,7 @@ class RivenConnection(QuicConnectionProtocol):
             state:dict[str,Any] | None = None,
             extensions:dict[str, dict[object, object]] | None = None
             ) -> None:
-        """Parse pseudo headers of H3 Events and create HTTPScope"""
+        """Parse pseudo headers of H3 Events and create HTTPScope and """
         if not isinstance(event,HeadersReceived):
             raise exceptions.InvalidEvent(event)
 
@@ -184,3 +185,30 @@ class RivenConnection(QuicConnectionProtocol):
 
         stream_context.task = task
         self._active_streams[event.stream_id] = stream_context
+
+    async def _handle_data_received(
+        self,
+        event:H3Event
+    ):
+        if not isinstance(event,DataReceived):
+            raise exceptions.InvalidEvent(event)
+
+        request_body:HTTPRequestEvent = {
+            "type" : HTTPConnectionEventType.REQUEST,
+            "body" : event.data,
+            "more_body" : not event.stream_ended
+        }
+
+        context = self._active_streams.get(event.stream_id)
+
+        if context is None:
+            # Stream already closed/reset or unknown stream
+            return
+
+        if not isinstance(context,HTTPStreamContext):
+            raise exceptions.InvalidStreamContext(context)
+
+        await context._push_request(request_body)
+
+        if event.stream_ended:
+            await context._finish_request()   
