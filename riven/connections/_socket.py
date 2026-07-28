@@ -86,10 +86,10 @@ class RivenConnection(QuicConnectionProtocol):
                     method = RequestMethod(value.decode("ascii"))
                     # Reject CONNECT method
                     if method == RequestMethod.CONNECT:
-                        raise exceptions.UnsupportedMethod("CONNECT")
+                        raise exceptions.MethodNotAllowed("CONNECT")
 
                 except ValueError:
-                    raise exceptions.UnsupportedMethod(value.decode("ascii"))
+                    raise exceptions.MethodNotAllowed(value.decode("ascii"))
                 
             elif name == b":scheme":
                 if scheme is not None:
@@ -121,7 +121,7 @@ class RivenConnection(QuicConnectionProtocol):
                 headers.append((name, value))
 
         if method is None:
-            raise exceptions.UnsupportedMethod(None)
+            raise exceptions.MethodNotAllowed(None)
 
         if scheme is None:
             raise exceptions.InvalidScheme()

@@ -88,5 +88,5 @@ class HTTPStreamContext:
         return self._closed
 
     @property
-    def _request_complete(self):
+    def request_complete(self):
         return self._request_complete
