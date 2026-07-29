@@ -51,6 +51,9 @@ class RivenConnection(QuicConnectionProtocol):
         elif isinstance(event,ConnectionTerminated):
             asyncio.create_task(self._schedule_disconnect(event))
 
+        elif isinstance(event,StreamReset) or isinstance(event,StopSendingReceived):
+            asyncio.create_task(self._handle_stream_interrupt(event))
+
         if self._http:
             for http_event in self._http.handle_event(event):
                 asyncio.create_task(self.handle_h3_event(http_event))
@@ -252,3 +255,18 @@ class RivenConnection(QuicConnectionProtocol):
             await context.close()   
 
         self._active_streams.pop(context.stream_id, None)
+
+    async def _handle_stream_interrupt(self,event: StopSendingReceived | StreamReset):
+        if not isinstance(event, (StreamReset, StopSendingReceived)):
+            raise exceptions.InvalidEvent(event)
+
+        context = self._active_streams.get(event.stream_id)
+        
+        if context is None:
+            # Stream already closed/reset or unknown stream
+            return
+    
+        if not isinstance(context,HTTPStreamContext):
+            raise exceptions.InvalidStreamContext(context)
+
+        await self._close_stream(context=context) # close stream by sending HTTPDisconnectEvent using _close_stream
