@@ -21,7 +21,8 @@ from rcp import (
     HTTPVersions,
     RCPReceiveEvent,
     HTTPRequestEvent,
-    HTTPConnectionEventType
+    HTTPConnectionEventType,
+    HTTPDisconnectEvent
 )
 from rcp.rcp import RCPVersions
 from rcp.methods import RequestMethod
@@ -39,6 +40,7 @@ class RivenConnection(QuicConnectionProtocol):
         self._active_streams:dict[int,HTTPStreamContext] = dict()
         self._http = None
         self._manager.add_connection(self)
+        self._disconnected = False
 
 
     def quic_event_received(self, event):
@@ -47,7 +49,7 @@ class RivenConnection(QuicConnectionProtocol):
                 self._http = H3Connection(self._quic) # Upgrade to HTTP3
 
         elif isinstance(event,ConnectionTerminated):
-            asyncio.create_task(self._handle_disconnect(event))
+            asyncio.create_task(self._schedule_disconnect(event))
 
         if self._http:
             for http_event in self._http.handle_event(event):
@@ -190,6 +192,7 @@ class RivenConnection(QuicConnectionProtocol):
         self,
         event:H3Event
     ):
+        """Parse DataReceived and generate HTTPRequestEvent and add to request queue for that stream and handle end streams to mark request end"""
         if not isinstance(event,DataReceived):
             raise exceptions.InvalidEvent(event)
 
@@ -211,4 +214,41 @@ class RivenConnection(QuicConnectionProtocol):
         await context._push_request(request_body)
 
         if event.stream_ended:
-            await context._finish_request()   
+            await context._finish_request()
+
+    async def _schedule_disconnect(
+        self,
+        event:ConnectionTerminated 
+    ):
+        """Handle an HTTP/3 connection termination by scheduling cleanup for all active streams."""
+        if not isinstance(event,ConnectionTerminated):
+            raise exceptions.InvalidEvent(event)
+
+
+        contexts = [context for context in self._active_streams.values()] # get all 
+        tasks = [self._close_stream(context) for context in contexts if not context.is_closed]
+
+        if tasks:
+            results = await asyncio.gather(*tasks,return_exceptions=True)
+            for context , exception in zip(contexts,results):
+                if isinstance(exception,Exception):
+                    ... # add logging logic after adding logging
+                 
+        self._disconnected = True
+        self._manager._active_connections.pop(self._quic.host_cid,None) # remove connection manager
+
+    async def _close_stream(
+        self,
+        context:HTTPStreamContext
+    ):
+        """Gracefully close an HTTP stream after a client disconnect."""
+        disconnect_event:HTTPDisconnectEvent = {"type":HTTPConnectionEventType.DISCONNECT}
+        if not context.request_complete:
+            await context._push_request(disconnect_event)
+
+        await asyncio.sleep(15) 
+
+        if not context.task.done():
+            await context.close()   
+
+        self._active_streams.pop(context.stream_id, None)
