@@ -71,9 +71,26 @@ class RivenConnection(QuicConnectionProtocol):
             state:dict[str,Any] | None = None,
             extensions:dict[str, dict[object, object]] | None = None
             ) -> None:
-        """Parse pseudo headers of H3 Events and create HTTPScope and """
+        """Parse pseudo headers of H3 Events and create HTTPScope , StreamContext and call application reject on max_header_size"""
         if not isinstance(event,HeadersReceived):
             raise exceptions.InvalidEvent(event)
+
+        header_size = self.header_list_size(event.headers)
+
+        if (self._manager.config.max_header_size > 0 # rejecting if headers exceed limit
+            and header_size > self._manager.config.max_header_size
+        ):
+            self._http.send_headers(
+                stream_id=event.stream_id,
+                headers=[
+                    (b":status", b"431"),
+                    (b"content-length", b"0"),
+                ],
+                end_stream=True,
+            )
+
+            self.transmit()
+            return
 
         method = None
         scheme = None
@@ -179,7 +196,8 @@ class RivenConnection(QuicConnectionProtocol):
             method=method,
             scheme=scheme,
             http_version=HTTPVersions.HTTP3,
-            protocol=self
+            protocol=self,
+            max_queue_size=self._manager.config.max_queue_size
         )
 
         try:
@@ -270,3 +288,9 @@ class RivenConnection(QuicConnectionProtocol):
             raise exceptions.InvalidStreamContext(context)
 
         await self._close_stream(context=context) # close stream by sending HTTPDisconnectEvent using _close_stream
+
+    def header_list_size(headers):
+        return sum(
+            len(name) + len(value) + 32
+            for name, value in headers
+        )

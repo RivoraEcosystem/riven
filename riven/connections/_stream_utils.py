@@ -25,7 +25,8 @@ class HTTPStreamContext:
         method:RequestMethod,
         scheme:HTTPScheme,
         http_version:HTTPVersions,
-        protocol:RivenConnection
+        protocol:RivenConnection,
+        max_queue_size:int|None=0
         ) -> None:
         self.stream_id = stream_id
         self.connection = connection
@@ -34,7 +35,7 @@ class HTTPStreamContext:
         self.http_version = http_version
         self._protocol = protocol
 
-        self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=10)
+        self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
 
         self._request_complete = False
         self._closed = False
