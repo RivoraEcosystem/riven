@@ -8,11 +8,9 @@ from rcp import (
     LifespanScope,
     RCPReceiveEvent,
     RCPSendEvent,
-    LifespanStartupCompleteEvent,
-    LifespanStartupFailedEvent,
-    LifespanShutdownCompleteEvent,
-    LifespanShutdownFailedEvent,
-
+    LifespanEventType,
+    LifespanStartupEvent,
+    LifespanShutdownEvent
 )
 
 if TYPE_CHECKING:
@@ -74,15 +72,13 @@ class LifespanContext:
         except asyncio.QueueShutDown:
             return None
 
-    async def startup(self):
-        await self._push(
-            {"type": "lifespan.startup"}
-        )   
+    async def startup(self) -> None:
+        event: LifespanStartupEvent = {"type":LifespanEventType.STARTUP}
+        await self._push(event)   
 
-    async def shutdown(self):
-        await self._push(
-            {"type": "lifespan.shutdown"}
-        )
+    async def shutdown(self) -> None:
+        event: LifespanShutdownEvent = {"type":LifespanEventType.SHUTDOWN} 
+        await self._push(event)
 
     @property
     def closed(self) -> bool:
