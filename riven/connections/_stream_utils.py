@@ -50,7 +50,7 @@ class HTTPStreamContext:
         "Add none at last to mark request data ending"
 
         await self._request_queue.put(self.EOF)
-        await self._request_queue.shutdown(immediate=False)
+        self._request_queue.shutdown(immediate=False)
         self._request_complete = True
 
     async def _pop_request(self) -> RCPReceiveEvent | None:
@@ -82,7 +82,7 @@ class HTTPStreamContext:
         if self.task is not None and not self.task.done(): # prevent canceling alraedy canclled or completed task
             self.task.cancel()
 
-        await self._request_queue.shutdown(immediate=True) # shutdown queue immediately
+        self._request_queue.shutdown(immediate=True) # shutdown queue immediately
 
     @property
     def is_closed(self):
