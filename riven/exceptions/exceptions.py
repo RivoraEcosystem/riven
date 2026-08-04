@@ -98,3 +98,38 @@ class InvalidStreamContext(RivenException):
         self.context = context
 
         super().__init__(f"Unexpected StreamContext , got {type(context).__name__}")
+
+
+class InvalidLifespanState(RivenException):
+    """Raised when an invalid lifespan state transition occurs."""
+
+    def __init__(
+        self,
+        state: Any,
+        event: Any,
+    ):
+        self.state = state
+        self.event = event
+
+        state_name = getattr(state, "name", str(state))
+        event_name = getattr(event, "name", str(event))
+
+        super().__init__(
+            f"Invalid lifespan transition: state={state_name}, event={event_name}"
+        )
+
+
+class LifespanAlreadyCompleted(RivenException):
+    """Raised when a lifespan phase completes more than once."""
+
+    def __init__(self, phase: str):
+        self.phase = phase
+        super().__init__(f"Lifespan {phase} has already completed.")
+
+
+class LifespanNotStarted(RivenException):
+    """Raised when a lifespan completion event is received before the phase starts."""
+
+    def __init__(self, phase: str):
+        self.phase = phase
+        super().__init__(f"Lifespan {phase} has not been started.")

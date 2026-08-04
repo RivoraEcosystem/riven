@@ -22,6 +22,7 @@ class LifespanState(Enum):
     STARTED = auto()
     STOPPING = auto()
     STOPPED = auto()
+    FAILED = auto()
 
 
 class LifespanContext:

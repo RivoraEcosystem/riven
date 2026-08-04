@@ -4,6 +4,7 @@ from rcp import (
     RCPSendCallable,
     Scope,
     LifespanScope,
+    LifespanEventType,
     HTTPRequestEvent,
     HTTPResponseDebugEvent,
     HTTPResponseStartEvent,
@@ -25,7 +26,6 @@ from connections import (
     RivenConnection,
     ConnectionInfo,
     HTTPStreamContext,
-    EventHandler
 )
 
 from .exceptions.exceptions import (
@@ -37,7 +37,10 @@ from .exceptions.exceptions import (
     InvalidScheme,
     InvalidAuthority,
     InvalidPath,
-    InvalidStreamContext
+    InvalidStreamContext,
+    InvalidLifespanState,
+    LifespanAlreadyCompleted,
+    LifespanNotStarted
 )
 
 from .lifespan import (
@@ -51,6 +54,7 @@ from typing import Any
 
 
 type CONTEXT = HTTPStreamContext|LifespanContext
+type LifespanSendEvent = LifespanStartupCompleteEvent|LifespanStartupFailedEvent|LifespanShutdownCompleteEvent|LifespanShutdownFailedEvent
 
 class Riven: # server connection manager 
     def __init__(
@@ -115,3 +119,97 @@ class Riven: # server connection manager
             await self._shutdown_future
         finally:
             await self.lifespan.close()
+
+    async def handle_lifespan_event(
+        self,
+        context: LifespanContext,
+        event: LifespanSendEvent,
+    ) -> None:
+        match event["type"]:
+
+            case LifespanEventType.STARTUP_COMPLETE:
+
+                if context.state is not LifespanState.STARTING:
+                    raise InvalidLifespanState(
+                        context.state,
+                        event["type"],
+                    )
+
+                if self._startup_future is None:
+                    raise LifespanNotStarted("startup")
+
+                if self._startup_future.done():
+                    raise LifespanAlreadyCompleted("startup")
+
+                context.state = LifespanState.STARTED
+                self._startup_future.set_result(None)
+
+            case LifespanEventType.STARTUP_FAILED:
+
+                if context.state is not LifespanState.STARTING:
+                    raise InvalidLifespanState(
+                        context.state,
+                        event["type"],
+                    )
+
+                if self._startup_future is None:
+                    raise LifespanNotStarted("startup")
+
+                if self._startup_future.done():
+                    raise LifespanAlreadyCompleted("startup")
+
+                context.state = LifespanState.FAILED
+
+                self._startup_future.set_exception(
+                    RuntimeError(
+                        event.get(
+                            "message",
+                            "Application startup failed.",
+                        )
+                    )
+                )
+
+            case LifespanEventType.SHUTDOWN_COMPLETE:
+
+                if context.state is not LifespanState.STOPPING:
+                    raise InvalidLifespanState(
+                        context.state,
+                        event["type"],
+                    )
+
+                if self._shutdown_future is None:
+                    raise LifespanNotStarted("shutdown")
+
+                if self._shutdown_future.done():
+                    raise LifespanAlreadyCompleted("shutdown")
+
+                context.state = LifespanState.STOPPED
+                self._shutdown_future.set_result(None)
+
+            case LifespanEventType.SHUTDOWN_FAILED:
+
+                if context.state is not LifespanState.STOPPING:
+                    raise InvalidLifespanState(
+                        context.state,
+                        event["type"],
+                    )
+
+                if self._shutdown_future is None:
+                    raise LifespanNotStarted("shutdown")
+
+                if self._shutdown_future.done():
+                    raise LifespanAlreadyCompleted("shutdown")
+
+                context.state = LifespanState.FAILED
+
+                self._shutdown_future.set_exception(
+                    RuntimeError(
+                        event.get(
+                            "message",
+                            "Application shutdown failed.",
+                        )
+                    )
+                )
+
+            case _:
+                raise InvalidEvent(event["type"])
