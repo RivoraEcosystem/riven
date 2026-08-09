@@ -41,6 +41,7 @@ class RivenConnection(QuicConnectionProtocol):
         self._http = None
         self._manager.add_connection(self)
         self._disconnected = False
+        
 
 
     def quic_event_received(self, event):
@@ -56,10 +57,10 @@ class RivenConnection(QuicConnectionProtocol):
 
         if self._http:
             for http_event in self._http.handle_event(event):
-                asyncio.create_task(self.handle_h3_event(http_event))
+                asyncio.create_task(self._handle_h3_event(http_event))
 
 
-    async def handle_h3_event(self,event:H3Event):
+    async def _handle_h3_event(self,event:H3Event):
         if isinstance(event,HeadersReceived):
             await self._create_stream(event=event,state=self._manager.state,extensions=self._manager.extensions)
         elif isinstance(event,DataReceived):
@@ -67,7 +68,7 @@ class RivenConnection(QuicConnectionProtocol):
 
     async def _create_stream(
             self,
-            event:H3Event,
+            event: HeadersReceived,
             state:dict[str,Any] | None = None,
             extensions:dict[str, dict[object, object]] | None = None
             ) -> None:
@@ -175,7 +176,7 @@ class RivenConnection(QuicConnectionProtocol):
             "path": path,
             "raw_path": raw_path,
             "query_string": query_string,
-            "root_path": self._manager.root_path,
+            "root_path": self._manager.config.root_path,
             "headers": headers,
             "client": client,
             "server": server,
@@ -186,12 +187,13 @@ class RivenConnection(QuicConnectionProtocol):
         if extensions is not None:
             http_scope['extensions'] = extensions
 
-        stream_context = HTTPStreamContext( # build http stream context
-            connection=ConnectionInfo(
+        connection = ConnectionInfo(
                 stream_id=event.stream_id,
                 server=server,
                 client=client,
-            ),
+            )
+        stream_context = HTTPStreamContext( # build http stream context
+            connection=connection,
             stream_id=event.stream_id,
             method=method,
             scheme=scheme,
@@ -200,18 +202,20 @@ class RivenConnection(QuicConnectionProtocol):
             max_queue_size=self._manager.config.max_queue_size
         )
 
+        self._active_streams[event.stream_id] = stream_context
         try:
             task = await self._manager._start_rcp_application(http_scope,stream_context)
         except Exception:
             await stream_context.close()
+            self._active_streams.pop(stream_context.stream_id,None)
             raise
 
         stream_context.task = task
-        self._active_streams[event.stream_id] = stream_context
+        
 
     async def _handle_data_received(
         self,
-        event:H3Event
+        event: DataReceived
     ):
         """Parse DataReceived and generate HTTPRequestEvent and add to request queue for that stream and handle end streams to mark request end"""
         if not isinstance(event,DataReceived):
@@ -246,14 +250,18 @@ class RivenConnection(QuicConnectionProtocol):
             raise exceptions.InvalidEvent(event)
 
 
-        contexts = [context for context in self._active_streams.values()] # get all 
-        tasks = [self._close_stream(context) for context in contexts if not context.is_closed]
 
-        if tasks:
-            results = await asyncio.gather(*tasks,return_exceptions=True)
-            for context , exception in zip(contexts,results):
-                if isinstance(exception,Exception):
-                    ... # add logging logic after adding logging
+        active = [c for c in self._active_streams.values() if not c.is_closed]
+
+        results = await asyncio.gather(
+            *(self._close_stream(c) for c in active),
+            return_exceptions=True,
+        )
+
+        for context, result in zip(active, results):
+
+            if isinstance(result,Exception):
+                ... # add logging logic after adding logging
                  
         self._disconnected = True
         self._manager._active_connections.pop(self._quic.host_cid,None) # remove connection manager
@@ -268,9 +276,7 @@ class RivenConnection(QuicConnectionProtocol):
             await context._push_request(disconnect_event)
 
         await asyncio.sleep(15) 
-
-        if not context.task.done():
-            await context.close()   
+        await context.close()
 
         self._active_streams.pop(context.stream_id, None)
 
@@ -289,6 +295,7 @@ class RivenConnection(QuicConnectionProtocol):
 
         await self._close_stream(context=context) # close stream by sending HTTPDisconnectEvent using _close_stream
 
+    @staticmethod
     def header_list_size(headers):
         return sum(
             len(name) + len(value) + 32

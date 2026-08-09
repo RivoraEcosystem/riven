@@ -71,6 +71,7 @@ class Riven: # server connection manager
         self.lifespan: LifespanContext | None = None
         self._startup_future: asyncio.Future[None] | None = None
         self._shutdown_future: asyncio.Future[None] | None = None
+        self.root_path = config.root_path if not config.root_path else ""
 
     def add_connection(self,connection:RivenConnection) -> None:
         self._active_connections[connection.connection_id] = connection
@@ -92,6 +93,8 @@ class Riven: # server connection manager
 
         if self.state is not None:
             scope["state"] = self.state
+        if self.extensions is not None:
+            scope["extensions"] = self.extensions
 
         self.lifespan = LifespanContext(self, scope)
 
