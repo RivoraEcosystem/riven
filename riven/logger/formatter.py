@@ -13,6 +13,7 @@ from .colors import (
     method_color,
     status_color,
     supports_color,
+    status_phrase
 )
 
 
@@ -77,10 +78,13 @@ class AccessFormatter(DefaultFormatter):
             )
 
         if status_code is not None:
-            record.__dict__["status_code"] = colorize(
+            record.__dict__["status_code"] = f"{colorize(
                 str(status_code),
                 status_color(int(status_code)),
-                self.use_colors,
-            )
+                self.use_colors
+            )} {status_phrase(status_code)}"
+
+        request_line = f"{record.__dict__["path"]} {record.__dict__["http_version"]}"
+        record.__dict__["request_line"] = request_line
 
         return super(DefaultFormatter, self).format(record)

@@ -8,6 +8,7 @@ import logging
 import sys
 from enum import StrEnum
 from typing import TextIO
+from http import HTTPStatus
 
 __all__ = (
     "ANSIColor",
@@ -117,3 +118,9 @@ def status_color(status_code: int) -> ANSIColor:
         return ANSIColor.YELLOW
 
     return ANSIColor.RED
+
+def status_phrase(status_code: int) -> str:
+    try:
+        return HTTPStatus(status_code).phrase
+    except ValueError:
+        return ""

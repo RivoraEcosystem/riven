@@ -23,5 +23,5 @@ LIFECYCLE_LOGGER_NAME = f"{LOGGER_NAME}.lifecycle"
 DEFAULT_LOG_FORMAT = "%(levelprefix)s %(message)s"
 
 DEFAULT_ACCESS_LOG_FORMAT = (
-    '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+    '%(levelprefix)s %(client_addr)s - "%(method)s %(request_line)s" %(status_code)s'
 )

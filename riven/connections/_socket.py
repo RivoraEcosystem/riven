@@ -19,14 +19,19 @@ from rcp import (
     HTTPScope,
     ScopeType,
     HTTPVersions,
-    RCPReceiveEvent,
+    HTTPSendEvents,
     HTTPRequestEvent,
     HTTPConnectionEventType,
+    HTTPDisconnectEvent,
+    RCPVersions,
+    RequestMethod,
+    HTTPScheme,
+    HTTPResponseEventType,
+    HTTPResponseStartEvent,
+    HTTPResponseBodyEvent,
+    HTTPResponseTrailersEvent,
     HTTPDisconnectEvent
 )
-from rcp.rcp import RCPVersions
-from rcp.methods import RequestMethod
-from rcp.scheme import HTTPScheme
 from ..server import Riven
 from ._stream_utils import HTTPStreamContext , ConnectionInfo
 import asyncio
@@ -184,7 +189,7 @@ class RivenConnection(QuicConnectionProtocol):
         if state is not None:
             http_scope['state'] = state
 
-        if extensions is not None:
+        if extensions is not None:  
             http_scope['extensions'] = extensions
 
         connection = ConnectionInfo(
@@ -249,8 +254,6 @@ class RivenConnection(QuicConnectionProtocol):
         if not isinstance(event,ConnectionTerminated):
             raise exceptions.InvalidEvent(event)
 
-
-
         active = [c for c in self._active_streams.values() if not c.is_closed]
 
         results = await asyncio.gather(
@@ -301,3 +304,23 @@ class RivenConnection(QuicConnectionProtocol):
             len(name) + len(value) + 32
             for name, value in headers
         )
+
+    async def handle_send_event(self,stream_id,event:HTTPSendEvents):
+        if not self._disconnected:
+            return
+
+        match event["type"]:
+            case HTTPResponseEventType.START:
+                event:HTTPResponseStartEvent = event
+                
+
+            case HTTPResponseEventType.BODY:
+                ...
+            case HTTPResponseEventType.TRAILERS:
+                ...
+            case HTTPConnectionEventType.DISCONNECT:
+                ...
+            case HTTPResponseEventType.DEBUG:
+                ...
+            case _:
+                ...

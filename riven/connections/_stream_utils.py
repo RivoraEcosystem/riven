@@ -26,6 +26,7 @@ class HTTPStreamContext:
         scheme:HTTPScheme,
         http_version:HTTPVersions,
         protocol:RivenConnection,
+        path:str,
         max_queue_size:int|None=0
         ) -> None:
         self.stream_id = stream_id
@@ -34,12 +35,15 @@ class HTTPStreamContext:
         self.scheme = scheme
         self.http_version = http_version
         self._protocol = protocol
+        self._path = path
+        self._response_status_code:int|None = None
 
         self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
 
         self._request_complete = False
         self._closed = False
         self.task: asyncio.Task[None] | None = None # stores task of Rcp application
+        self.trailers_enabled:bool = False # Trailers Omitted/Included
 
     async def _push_request(self, data:RCPReceiveEvent) -> None:
         "Add data to request queue buffer"
