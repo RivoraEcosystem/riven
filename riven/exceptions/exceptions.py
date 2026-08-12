@@ -133,3 +133,18 @@ class LifespanNotStarted(RivenException):
     def __init__(self, phase: str):
         self.phase = phase
         super().__init__(f"Lifespan {phase} has not been started.")
+
+class InvalidEventField(RivenException):
+    """Raised when an event field has an invalid type."""
+
+    def __init__(
+        self,
+        field: str,
+        got: type,
+        expected: type,
+    ) -> None:
+        super().__init__(
+            f"Invalid field {field!r} in event.\n"
+            f"Expected: {expected.__name__}\n"
+            f"Got: {got.__name__}"
+        )
