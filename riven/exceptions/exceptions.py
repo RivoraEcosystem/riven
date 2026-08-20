@@ -94,10 +94,8 @@ class InvalidPath(RivenException):
 
 class InvalidStreamContext(RivenException):
     """Raised when an invalid object is stored as a stream context."""
-    def __init__(self, context:Any):
-        self.context = context
-
-        super().__init__(f"Unexpected StreamContext , got {type(context).__name__}")
+    def __init__(self, context:Any,expected:type):
+        super().__init__(f"Unexpected StreamContext expected {expected.__name__}, got {type(context).__name__}")
 
 
 class InvalidLifespanState(RivenException):
@@ -148,3 +146,9 @@ class InvalidEventField(RivenException):
             f"Expected: {expected.__name__}\n"
             f"Got: {got.__name__}"
         )
+
+class InvalidStatusCode(RivenException):
+    """Raised when an event sends invalid http status code"""
+
+    def __init__(self, *args):
+        super().__init__(*args)

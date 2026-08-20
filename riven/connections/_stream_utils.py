@@ -31,17 +31,21 @@ class HTTPStreamContext:
         ) -> None:
         self.stream_id = stream_id
         self.connection = connection
+        self._protocol = protocol
+
         self.method = method
         self.scheme = scheme
         self.http_version = http_version
-        self._protocol = protocol
         self._path = path
+
         self._response_status_code:int|None = None
+        self._response_started:bool = False
+        self._response_complete:bool = False
 
         self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
-
         self._request_complete = False
         self._closed = False
+
         self.task: asyncio.Task[None] | None = None # stores task of Rcp application
         self.trailers_enabled:bool = False # Trailers Omitted/Included
 
