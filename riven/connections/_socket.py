@@ -13,7 +13,8 @@ from aioquic.h3.events import (
 )
 from aioquic.h3.connection import (
     H3_ALPN,
-    H3Connection
+    H3Connection,
+    ErrorCode
 )
 from rcp import (
     HTTPScope,
@@ -37,6 +38,13 @@ from ._stream_utils import HTTPStreamContext , ConnectionInfo
 import asyncio
 from ..exceptions import exceptions
 from typing import Any
+from rcp.events import Headers
+from collections.abc import Iterable
+import logging
+from typing import Literal
+
+access_logger = logging.getLogger("riven.access")
+protocol_logger = logging.getLogger("riven.protocol")
 
 class RivenConnection(QuicConnectionProtocol):
     def __init__(self ,manager:Riven ,*args ,**kwargs):
@@ -204,6 +212,7 @@ class RivenConnection(QuicConnectionProtocol):
             scheme=scheme,
             http_version=HTTPVersions.HTTP3,
             protocol=self,
+            path=path,
             max_queue_size=self._manager.config.max_queue_size
         )
 
@@ -239,7 +248,7 @@ class RivenConnection(QuicConnectionProtocol):
             return
 
         if not isinstance(context,HTTPStreamContext):
-            raise exceptions.InvalidStreamContext(context)
+            raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
 
         await context._push_request(request_body)
 
@@ -294,7 +303,7 @@ class RivenConnection(QuicConnectionProtocol):
             return
     
         if not isinstance(context,HTTPStreamContext):
-            raise exceptions.InvalidStreamContext(context)
+            raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
 
         await self._close_stream(context=context) # close stream by sending HTTPDisconnectEvent using _close_stream
 
@@ -306,21 +315,217 @@ class RivenConnection(QuicConnectionProtocol):
         )
 
     async def handle_send_event(self,stream_id,event:HTTPSendEvents):
-        if not self._disconnected:
+        if self._disconnected:
             return
 
-        match event["type"]:
-            case HTTPResponseEventType.START:
-                event:HTTPResponseStartEvent = event
-                
+        context = self._active_streams.get(stream_id)
 
-            case HTTPResponseEventType.BODY:
-                ...
-            case HTTPResponseEventType.TRAILERS:
-                ...
-            case HTTPConnectionEventType.DISCONNECT:
-                ...
-            case HTTPResponseEventType.DEBUG:
-                ...
-            case _:
-                ...
+        if not isinstance(context,HTTPStreamContext): # invalid stream context
+            client = self._transport.get_extra_info("peername") # get client info
+            protocol_logger.error(f"{client[0]}:{client[1]} - Invalid Stream context for stream id {stream_id}")
+            raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
+
+        if context._response_complete: # response already completed
+            await self._close_stream(context=context) # close stream
+            await self.reset_stream(stream_id=stream_id) # reset stream
+            access_logger.error(
+                "",
+                extra={
+                    "client_addr": context.connection.client,
+                    "method": context.method,
+                    "path": context._path,
+                    "status_code": "",
+                },
+            )
+            raise RuntimeError(f"Unexpected RCP Event after response already completed.")
+
+        if context.is_closed:
+            await self.reset_stream(stream_id=stream_id)
+            access_logger.error(
+                "",
+                extra={
+                    "client_addr": context.connection.client,
+                    "method": context.method,
+                    "path": context._path,
+                    "status_code": "",
+                },
+            )
+            raise RuntimeError(f"Unexpected RCP Event after stream closed.")
+
+        if event["type"] == HTTPResponseEventType.START:
+            try:
+                event:HTTPResponseStartEvent = event
+
+                if context._response_started:
+                    await self.reset_stream(stream_id=stream_id)
+                    client = self._transport.get_extra_info("peername") # get client info
+                    protocol_logger.error(f"Failed to send Response Start to Client - {client[0]}:{client[1]} Response already started")
+                    raise RuntimeError(f"Unexpected HTTPResponseStartEvent after response already started")
+                
+                status_code = event.get("status")
+                context.trailers_enabled = bool(event.get("trailers", False))
+                headers = event.get("headers")
+
+                try:
+                    self.validate_rcp_response_start_fields(
+                        event=event,
+                        status_code=status_code,
+                        stream_id=stream_id,
+                        context=context,
+                        headers=headers
+                    )
+                except exceptions.RivenException:
+                    await self.send_500_response(stream_id,context) # send internal server error
+                    await context.close()
+                    raise
+
+                pseudo_headers = self.construct_pseudo_headers(context._response_status_code) # construct pseduo headers for HTTP3 response
+
+                new_headers = list(headers)
+                new_headers.extend(pseudo_headers)
+
+                try:
+                    self._http.send_headers(stream_id=context.stream_id,headers=new_headers,end_stream=False)
+                    self.transmit()
+                    context._response_status_code = status_code
+                    context._response_started = True
+                    return
+                except Exception as e:
+                    await self.reset_stream(stream_id=stream_id)
+                    await context.close() # close context
+                    client = self._transport.get_extra_info("peername") 
+                    protocol_logger.info(f"{client[0]}:{client[1]} - Failed to send headers reseting stream")
+
+                    raise # raise exception
+
+            except (
+                exceptions.InvalidEvent,
+                exceptions.InvalidStreamContext,
+                exceptions.InvalidStatusCode
+                ):
+            
+                if context.is_closed: # check if stream is closed
+                    client = self._transport.get_extra_info("peername") 
+                    protocol_logger.info(f"{client[0]}:{client[1]} - Stream disconnected; cancelling pending sends")
+                    await context.close()
+                    raise
+            
+                await self.send_500_response(stream_id,context)
+
+                raise
+
+        elif event["type"] == HTTPResponseEventType.BODY:
+            ...
+        elif event["type"] == HTTPResponseEventType.TRAILERS:
+            ...
+        elif event["type"] == HTTPConnectionEventType.DISCONNECT:
+            ...
+        elif event["type"] == HTTPResponseEventType.DEBUG:
+            ...
+        else:
+            raise RuntimeError(f"Unexpected RCP message '{event["type"]}' sent, after response already completed.")
+        
+    
+    def construct_pseudo_headers(self,status_code: int) -> list[tuple[bytes, bytes]]:
+        return [
+            (b":status", str(status_code).encode("ascii"))
+        ]
+
+    async def send_500_response(self,stream_id:int,context:HTTPStreamContext) -> None: # send 500 Internal Server Error response to client
+
+        if not isinstance(context,HTTPStreamContext): # invalid stream context
+            raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
+
+        access_logger.error(
+            "",
+            extra={
+                "client_addr": context.connection.client,
+                "method": context.method,
+                "path": context._path,
+                "status_code": 500,
+            },
+        )
+
+        self._http.send_headers( # 500 error headers
+            stream_id=stream_id,
+            headers=[
+                (b":status", b"500"),
+                (b"content-type", b"text/plain"),
+                (b"content-length", b"21"),
+            ],
+            end_stream=False,
+        )
+        self._http.send_data( # 500 error body
+            stream_id=stream_id,
+            data=b"Internal Server Error",
+            end_stream=True,
+        )
+        self.transmit()
+
+        return
+
+        
+    def check_status(self, code: int) -> bool: # check if status code is in range of valid HTTP codes 100 to 599
+        return 100 <= code <= 599
+
+    def validate_rcp_response_start_fields(
+            self,
+            event:HTTPSendEvents,
+            status_code:int,
+            context:HTTPStreamContext,
+            headers:Iterable
+        )-> Literal[True]:
+
+        """Check and validate rcp event fields"""
+
+        if not isinstance(context,HTTPStreamContext): # invalid stream context
+            raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
+        
+        if not isinstance(status_code,int): # Status code validation 
+            raise exceptions.InvalidEventField(
+                field="status",
+                got=type(event["status"]),
+                expected=int,
+            )
+        
+        if not self.check_status(status_code):
+            raise exceptions.InvalidStatusCode(f"Invalid HTTP Status code: {status_code}")
+        
+        if headers is None:
+            raise exceptions.InvalidEventField(
+                field="headers",
+                got=type(headers),
+                expected=Iterable
+            )
+        
+        for header in headers:
+
+            if not isinstance(header, tuple) or len(header) != 2:
+                raise exceptions.InvalidEventField(
+                    field="headers",
+                    got=type(header),
+                    expected=tuple,
+                )
+            
+            name, value = header
+
+            if not isinstance(name, bytes):
+                raise exceptions.InvalidEventField(
+                    field="header name",
+                    got=type(name),
+                    expected=bytes,
+                )
+            
+            if not isinstance(value, bytes):
+                raise exceptions.InvalidEventField(
+                    field="header value",
+                    got=type(value),
+                    expected=bytes,
+                )
+            
+        return True
+
+    async def reset_stream(self,stream_id:int,error:ErrorCode = ErrorCode.H3_INTERNAL_ERROR):
+        """Reset HTTP3 stream with H3_INTERNAL_ERROR"""
+        self._quic.reset_stream(stream_id=stream_id,error_code=error)
+        self.transmit()
