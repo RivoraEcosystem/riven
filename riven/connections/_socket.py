@@ -409,8 +409,9 @@ class RivenConnection(QuicConnectionProtocol):
                     protocol_logger.info(f"{client[0]}:{client[1]} - Stream disconnected; cancelling pending sends")
                     await context.close()
                     raise
-            
-                await self.send_500_response(stream_id,context)
+
+                if not context._response_started:
+                    await self.send_500_response(stream_id,context)
 
                 raise
 

@@ -77,12 +77,16 @@ class AccessFormatter(DefaultFormatter):
                 self.use_colors,
             )
 
-        if status_code is not None:
-            record.__dict__["status_code"] = f"{colorize(
-                str(status_code),
-                status_color(int(status_code)),
-                self.use_colors
-            )} {status_phrase(status_code)}"
+        if status_code:
+            record.__dict__["status_code"] = (
+                f"{colorize(
+                    str(status_code),
+                    status_color(int(status_code)),
+                    self.use_colors,
+                )} {status_phrase(int(status_code))}"
+            )
+        else:
+            record.__dict__["status_code"] = ""
 
         request_line = f"{record.__dict__["path"]} {record.__dict__["http_version"]}"
         record.__dict__["request_line"] = request_line
