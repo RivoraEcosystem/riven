@@ -376,7 +376,7 @@ class RivenConnection(QuicConnectionProtocol):
                     )
                 except exceptions.RivenException:
                     await self.send_500_response(stream_id,context) # send internal server error
-                    await context.close()
+                    await self.handle_close(context=context)
                     raise
 
                 pseudo_headers = self.construct_pseudo_headers(context._response_status_code) # construct pseduo headers for HTTP3 response
@@ -386,28 +386,31 @@ class RivenConnection(QuicConnectionProtocol):
 
                 try:
                     self._http.send_headers(stream_id=context.stream_id,headers=new_headers,end_stream=False)
-                    self.transmit()
+
                     context._response_status_code = status_code
                     context._response_started = True
+
+                    self.transmit()
+
                     return
                 except Exception as e:
                     await self.reset_stream(stream_id=stream_id)
-                    await context.close() # close context
+                    await self.handle_close(context=context) # close context
                     client = self._transport.get_extra_info("peername") 
                     protocol_logger.info(f"{client[0]}:{client[1]} - Failed to send headers reseting stream")
 
                     raise # raise exception
 
             except (
-                exceptions.InvalidEvent,
                 exceptions.InvalidStreamContext,
-                exceptions.InvalidStatusCode
+                exceptions.InvalidStatusCode,
+                RuntimeError
                 ):
             
                 if context.is_closed: # check if stream is closed
                     client = self._transport.get_extra_info("peername") 
                     protocol_logger.info(f"{client[0]}:{client[1]} - Stream disconnected; cancelling pending sends")
-                    await context.close()
+                    await self.handle_close(context=context)
                     raise
 
                 if not context._response_started:
@@ -416,12 +419,49 @@ class RivenConnection(QuicConnectionProtocol):
                 raise
 
         elif event["type"] == HTTPResponseEventType.BODY:
-            ...
+            try:
+                event:HTTPResponseBodyEvent = event
+
+                if not context._response_started: # Body arrived before headers
+                    await self.reset_stream(stream_id=stream_id)
+                    client = self._transport.get_extra_info("peername") # get client info
+                    protocol_logger.error(f"Failed to send Response Body to Client - {client[0]}:{client[1]} Body arrived before headers")
+                    raise RuntimeError(f"Unexpected HTTPResponseBodyEvent before response HTTPResponseStartEvent ")
+
+                body:bytes = event.get("body")
+                more_body:bool = bool(event.get('more_body',False)) # assume no more body as False as more body is optional
+
+                if not isinstance(body,bytes):
+                    raise exceptions.InvalidEventField(
+                        field="body",
+                        got=type(event['body']),
+                        expected=bytes,
+                    )
+
+                try:
+                    end_stream = not more_body and not context.trailers_enabled # end stream only when there is no more body and there are no trailers
+                    self._http.send_data(stream_id=context.stream_id,data=body,end_stream=end_stream)
+                    self.transmit()
+                except Exception as e:
+                    await self.reset_stream(stream_id=context.stream_id)
+                    await self.handle_close(context=context)
+                    client = self._transport.get_extra_info("peername") 
+                    protocol_logger.info(f"{client[0]}:{client[1]} - Failed to send response reseting stream")
+
+                    raise            
+
+            except (
+                exceptions.InvalidEventField,
+                RuntimeError
+                ):
+                if not context.is_closed:
+                    await self.handle_close(context=context)
+
+                raise
+                
         elif event["type"] == HTTPResponseEventType.TRAILERS:
             ...
         elif event["type"] == HTTPConnectionEventType.DISCONNECT:
-            ...
-        elif event["type"] == HTTPResponseEventType.DEBUG:
             ...
         else:
             raise RuntimeError(f"Unexpected RCP message '{event["type"]}' sent, after response already completed.")
@@ -530,3 +570,8 @@ class RivenConnection(QuicConnectionProtocol):
         """Reset HTTP3 stream with H3_INTERNAL_ERROR"""
         self._quic.reset_stream(stream_id=stream_id,error_code=error)
         self.transmit()
+
+    async def handle_close(self,context:HTTPStreamContext):
+        """Close StreamContext and remove from active stream"""
+        await context.close()
+        self._active_streams.pop(context.stream_id, None)
