@@ -38,16 +38,20 @@ class HTTPStreamContext:
         self.http_version = http_version
         self._path = path
 
-        self._response_status_code:int|None = None
-        self._response_started:bool = False
-        self._response_complete:bool = False
+        self._closed = False
 
         self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
         self._request_complete = False
-        self._closed = False
+
+        self._response_status_code:int|None = None
+        self._response_started:bool = False        
+        self._response_body_sent: bool = False
+        self._response_complete:bool = False
+
+        self._stream_reset: bool = False
 
         self.task: asyncio.Task[None] | None = None # stores task of Rcp application
-        self.trailers_enabled:bool = False # Trailers Omitted/Included
+        self.trailers_enabled:bool = False # Whether the application declared that trailers will be sent
 
     async def _push_request(self, data:RCPReceiveEvent) -> None:
         "Add data to request queue buffer"
@@ -99,3 +103,11 @@ class HTTPStreamContext:
     @property
     def request_complete(self):
         return self._request_complete
+
+    @property
+    def response_body_sent(self):
+        return self._response_body_sent
+
+    @property
+    def stream_reset(self):
+        return self._stream_reset
