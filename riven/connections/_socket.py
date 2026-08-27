@@ -326,8 +326,10 @@ class RivenConnection(QuicConnectionProtocol):
             raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
 
         if context._response_complete: # response already completed
-            await self._close_stream(context=context) # close stream
-            await self.reset_stream(stream_id=stream_id) # reset stream
+            await self.handle_close(context=context) # close stream
+            if not context.stream_reset:
+                await self.reset_stream(stream_id=stream_id) # reset stream
+                context._stream_reset = True
             access_logger.error(
                 "",
                 extra={
@@ -340,7 +342,9 @@ class RivenConnection(QuicConnectionProtocol):
             raise RuntimeError(f"Unexpected RCP Event after response already completed.")
 
         if context.is_closed:
-            await self.reset_stream(stream_id=stream_id)
+            if not context.stream_reset:
+                await self.reset_stream(stream_id=stream_id) # reset stream
+                context._stream_reset = True
             access_logger.error(
                 "",
                 extra={
@@ -357,7 +361,9 @@ class RivenConnection(QuicConnectionProtocol):
                 event:HTTPResponseStartEvent = event
 
                 if context._response_started:
-                    await self.reset_stream(stream_id=stream_id)
+                    if not context.stream_reset:
+                        await self.reset_stream(stream_id=stream_id)
+                        context._stream_reset = True
                     client = self._transport.get_extra_info("peername") # get client info
                     protocol_logger.error(f"Failed to send Response Start to Client - {client[0]}:{client[1]} Response already started")
                     raise RuntimeError(f"Unexpected HTTPResponseStartEvent after response already started")
@@ -394,7 +400,9 @@ class RivenConnection(QuicConnectionProtocol):
 
                     return
                 except Exception as e:
-                    await self.reset_stream(stream_id=stream_id)
+                    if not context.stream_reset:
+                        await self.reset_stream(stream_id=stream_id)
+                        context._stream_reset = True
                     await self.handle_close(context=context) # close context
                     client = self._transport.get_extra_info("peername") 
                     protocol_logger.info(f"{client[0]}:{client[1]} - Failed to send headers reseting stream")
@@ -423,7 +431,9 @@ class RivenConnection(QuicConnectionProtocol):
                 event:HTTPResponseBodyEvent = event
 
                 if not context._response_started: # Body arrived before headers
-                    await self.reset_stream(stream_id=stream_id)
+                    if not context.stream_reset:
+                        await self.reset_stream(stream_id=stream_id)
+                        context._stream_reset = True
                     client = self._transport.get_extra_info("peername") # get client info
                     protocol_logger.error(f"Failed to send Response Body to Client - {client[0]}:{client[1]} Body arrived before headers")
                     raise RuntimeError(f"Unexpected HTTPResponseBodyEvent before response HTTPResponseStartEvent ")
@@ -442,8 +452,13 @@ class RivenConnection(QuicConnectionProtocol):
                     end_stream = not more_body and not context.trailers_enabled # end stream only when there is no more body and there are no trailers
                     self._http.send_data(stream_id=context.stream_id,data=body,end_stream=end_stream)
                     self.transmit()
+                    if not more_body:
+                        context._response_body_sent = True
+                    context._response_complete = end_stream
                 except Exception as e:
-                    await self.reset_stream(stream_id=context.stream_id)
+                    if not context.stream_reset:
+                        await self.reset_stream(stream_id=stream_id)
+                        context._stream_reset = True
                     await self.handle_close(context=context)
                     client = self._transport.get_extra_info("peername") 
                     protocol_logger.info(f"{client[0]}:{client[1]} - Failed to send response reseting stream")
