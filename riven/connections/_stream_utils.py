@@ -14,6 +14,9 @@ if TYPE_CHECKING:
     from ._socket import RivenConnection
 from dataclasses import dataclass
 import logging
+from aioquic.h3.connection import (
+    ErrorCode
+)
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
@@ -160,3 +163,13 @@ class HTTPStreamContext:
     
         finally:
             ...
+
+    async def reset_stream(self,stream_id:int,error:ErrorCode = ErrorCode.H3_INTERNAL_ERROR):
+        """Reset HTTP3 stream with H3_INTERNAL_ERROR"""
+        self._protocol._quic.reset_stream(stream_id=stream_id,error_code=error)
+        self._protocol.transmit()
+
+    async def handle_close(self):
+        """Close StreamContext and remove from active stream"""
+        await self.close()
+        self._protocol._active_streams.pop(self.stream_id, None)        
