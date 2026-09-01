@@ -53,19 +53,22 @@ class HTTPStreamContext:
         path:str,
         max_queue_size:int|None=0
         ) -> None:
-        self.stream_id = stream_id
-        self.connection = connection
-        self._protocol = protocol
-        self.scope = scope
 
+        self.connection = connection
+        self.stream_id = stream_id
+        
+        self.scope = scope
         self.method = method
         self.scheme = scheme
         self.http_version = http_version
+        self._protocol = protocol
         self._path = path
+        self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
+
+        self.task:asyncio.Task = None
 
         self._closed = False
 
-        self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
         self._request_complete = False
 
         self._response_status_code:int|None = None
@@ -74,8 +77,7 @@ class HTTPStreamContext:
         self._response_complete:bool = False
 
         self._stream_reset: bool = False
-
-        self.task: asyncio.Task[None] | None = None # stores task of Rcp application
+        
         self.trailers_enabled:bool = False # Whether the application declared that trailers will be sent
 
     async def _push_request(self, data:RCPReceiveEvent) -> None:
@@ -110,10 +112,6 @@ class HTTPStreamContext:
             return
 
         self._closed = True
-
-        if self.task is not None and not self.task.done(): # prevent canceling alraedy canclled or completed task
-            self.task.cancel()
-
         self._request_queue.shutdown(immediate=True) # shutdown queue immediately
 
     @property
@@ -143,7 +141,7 @@ class HTTPStreamContext:
         try:
             result = await app(self.scope, self.receive, self.send)
     
-        except BaseException as exc:
+        except Exception as exc:
     
             msg = "Exception in RCP application\n"
             protocol_logger.error(msg, exc_info=exc)
@@ -246,7 +244,7 @@ class HTTPStreamContext:
                 headers=headers
             )
 
-            pseudo_headers = self.construct_pseudo_headers(self._response_status_code) # construct pseduo headers for HTTP3 response
+            pseudo_headers = self.construct_pseudo_headers(status_code) # construct pseduo headers for HTTP3 response
 
             new_headers = list(headers)
             new_headers.extend(pseudo_headers)

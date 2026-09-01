@@ -202,13 +202,15 @@ class RivenConnection(QuicConnectionProtocol):
             http_scope['extensions'] = extensions
 
         connection = ConnectionInfo(
-                stream_id=event.stream_id,
-                server=server,
-                client=client,
-            )
+            stream_id=event.stream_id,
+            server=server,
+            client=client,
+        )
+
         stream_context = HTTPStreamContext( # build http stream context
             connection=connection,
             stream_id=event.stream_id,
+            scope=http_scope,
             method=method,
             scheme=scheme,
             http_version=HTTPVersions.HTTP3,
@@ -218,14 +220,9 @@ class RivenConnection(QuicConnectionProtocol):
         )
 
         self._active_streams[event.stream_id] = stream_context
-        try:
-            task = await self._manager._start_rcp_application(http_scope,stream_context)
-        except Exception:
-            await stream_context.close()
-            self._active_streams.pop(stream_context.stream_id,None)
-            raise
 
-        stream_context.task = task
+        stream_context.task = asyncio.get_event_loop().create_task(stream_context.run_rcp(self._manager._application)) # create task and store in stream_context
+        
         
 
     async def _handle_data_received(
