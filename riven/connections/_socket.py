@@ -31,7 +31,8 @@ from rcp import (
     HTTPResponseStartEvent,
     HTTPResponseBodyEvent,
     HTTPResponseTrailersEvent,
-    HTTPDisconnectEvent
+    HTTPDisconnectEvent,
+    RCPApplication
 )
 from ..server import Riven
 from ._stream_utils import HTTPStreamContext , ConnectionInfo
@@ -357,123 +358,76 @@ class RivenConnection(QuicConnectionProtocol):
             raise RuntimeError(f"Unexpected RCP Event after stream closed.")
 
         if event["type"] == HTTPResponseEventType.START:
-            try:
-                event:HTTPResponseStartEvent = event
 
-                if context._response_started:
-                    if not context.stream_reset:
-                        await self.reset_stream(stream_id=stream_id)
-                        context._stream_reset = True
-                    client = self._transport.get_extra_info("peername") # get client info
-                    protocol_logger.error(f"Failed to send Response Start to Client - {client[0]}:{client[1]} Response already started")
-                    raise RuntimeError(f"Unexpected HTTPResponseStartEvent after response already started")
-                
-                status_code = event.get("status")
-                context.trailers_enabled = bool(event.get("trailers", False))
-                headers = event.get("headers")
+            event:HTTPResponseStartEvent = event
 
-                try:
-                    self.validate_rcp_response_start_fields(
-                        event=event,
-                        status_code=status_code,
-                        stream_id=stream_id,
-                        context=context,
-                        headers=headers
-                    )
-                except exceptions.RivenException:
-                    await self.send_500_response(stream_id,context) # send internal server error
-                    await self.handle_close(context=context)
-                    raise
-
-                pseudo_headers = self.construct_pseudo_headers(context._response_status_code) # construct pseduo headers for HTTP3 response
-
-                new_headers = list(headers)
-                new_headers.extend(pseudo_headers)
-
-                try:
-                    self._http.send_headers(stream_id=context.stream_id,headers=new_headers,end_stream=False)
-
-                    context._response_status_code = status_code
-                    context._response_started = True
-
-                    self.transmit()
-
-                    return
-                except Exception as e:
-                    if not context.stream_reset:
-                        await self.reset_stream(stream_id=stream_id)
-                        context._stream_reset = True
-                    await self.handle_close(context=context) # close context
-                    client = self._transport.get_extra_info("peername") 
-                    protocol_logger.info(f"{client[0]}:{client[1]} - Failed to send headers reseting stream")
-
-                    raise # raise exception
-
-            except (
-                exceptions.InvalidStreamContext,
-                exceptions.InvalidStatusCode,
-                RuntimeError
-                ):
+            if context._response_started:
+                if not context.stream_reset:
+                    await self.reset_stream(stream_id=stream_id)
+                    context._stream_reset = True
+                client = self._transport.get_extra_info("peername") # get client info
+                protocol_logger.error(f"Failed to send Response Start to Client - {client[0]}:{client[1]} Response already started")
+                raise RuntimeError(f"Unexpected HTTPResponseStartEvent after response already started")
             
-                if context.is_closed: # check if stream is closed
-                    client = self._transport.get_extra_info("peername") 
-                    protocol_logger.info(f"{client[0]}:{client[1]} - Stream disconnected; cancelling pending sends")
-                    await self.handle_close(context=context)
-                    raise
+            status_code = event.get("status")
+            context.trailers_enabled = bool(event.get("trailers", False))
+            headers = event.get("headers")
 
-                if not context._response_started:
-                    await self.send_500_response(stream_id,context)
 
-                raise
+            self.validate_rcp_response_start_fields(
+                event=event,
+                status_code=status_code,
+                stream_id=stream_id,
+                context=context,
+                headers=headers
+            )
+
+            pseudo_headers = self.construct_pseudo_headers(context._response_status_code) # construct pseduo headers for HTTP3 response
+
+            new_headers = list(headers)
+            new_headers.extend(pseudo_headers)
+
+            
+            self._http.send_headers(stream_id=context.stream_id,headers=new_headers,end_stream=False)
+
+            context._response_status_code = status_code
+            context._response_started = True
+
+            self.transmit()
+
+            return
+
 
         elif event["type"] == HTTPResponseEventType.BODY:
-            try:
-                event:HTTPResponseBodyEvent = event
 
-                if not context._response_started: # Body arrived before headers
-                    if not context.stream_reset:
-                        await self.reset_stream(stream_id=stream_id)
-                        context._stream_reset = True
-                    client = self._transport.get_extra_info("peername") # get client info
-                    protocol_logger.error(f"Failed to send Response Body to Client - {client[0]}:{client[1]} Body arrived before headers")
-                    raise RuntimeError(f"Unexpected HTTPResponseBodyEvent before response HTTPResponseStartEvent ")
+            event:HTTPResponseBodyEvent = event
 
-                body:bytes = event.get("body")
-                more_body:bool = bool(event.get('more_body',False)) # assume no more body as False as more body is optional
+            if not context._response_started: # Body arrived before headers
+                if not context.stream_reset:
+                    await self.reset_stream(stream_id=stream_id)
+                    context._stream_reset = True
+                client = self._transport.get_extra_info("peername") # get client info
+                protocol_logger.error(f"Failed to send Response Body to Client - {client[0]}:{client[1]} Body arrived before headers")
+                raise RuntimeError(f"Unexpected HTTPResponseBodyEvent before response HTTPResponseStartEvent ")
 
-                if not isinstance(body,bytes):
-                    raise exceptions.InvalidEventField(
-                        field="body",
-                        got=type(event['body']),
-                        expected=bytes,
-                    )
+            body:bytes = event.get("body")
+            more_body:bool = bool(event.get('more_body',False)) # assume no more body as False as more body is optional
 
-                try:
-                    end_stream = not more_body and not context.trailers_enabled # end stream only when there is no more body and there are no trailers
-                    self._http.send_data(stream_id=context.stream_id,data=body,end_stream=end_stream)
-                    self.transmit()
-                    if not more_body:
-                        context._response_body_sent = True
-                    context._response_complete = end_stream
-                except Exception as e:
-                    if not context.stream_reset:
-                        await self.reset_stream(stream_id=stream_id)
-                        context._stream_reset = True
-                    await self.handle_close(context=context)
-                    client = self._transport.get_extra_info("peername") 
-                    protocol_logger.info(f"{client[0]}:{client[1]} - Failed to send response reseting stream")
+            if not isinstance(body,bytes):
+                raise exceptions.InvalidEventField(
+                    field="body",
+                    got=type(event['body']),
+                    expected=bytes,
+                )
+            
+            end_stream = not more_body and not context.trailers_enabled # end stream only when there is no more body and there are no trailers
+            self._http.send_data(stream_id=context.stream_id,data=body,end_stream=end_stream)
+            self.transmit()
 
-                    raise            
-
-            except (
-                exceptions.InvalidEventField,
-                RuntimeError
-                ):
-                if not context.is_closed:
-                    await self.handle_close(context=context)
-
-                raise
-                
+            if not more_body:
+                context._response_body_sent = True
+            context._response_complete = end_stream
+                    
         elif event["type"] == HTTPResponseEventType.TRAILERS:
             ...
         elif event["type"] == HTTPConnectionEventType.DISCONNECT:
@@ -589,4 +543,4 @@ class RivenConnection(QuicConnectionProtocol):
     async def handle_close(self,context:HTTPStreamContext):
         """Close StreamContext and remove from active stream"""
         await context.close()
-        self._active_streams.pop(context.stream_id, None)
+        self._active_streams.pop(context.stream_id, None)    

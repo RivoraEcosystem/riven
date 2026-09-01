@@ -2,7 +2,8 @@ from rcp import (
     RCPApplication,
     RCPSendEvent,
     RCPReceiveEvent,
-    HTTPVersions
+    HTTPVersions,
+    HTTPScope
 )
 from rcp.methods import RequestMethod
 from rcp.scheme import HTTPScheme
@@ -12,7 +13,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ._socket import RivenConnection
 from dataclasses import dataclass
+import logging
 
+access_logger = logging.getLogger("riven.access")
+protocol_logger = logging.getLogger("riven.protocol")
 
 class HTTPStreamContext:
 
@@ -22,6 +26,7 @@ class HTTPStreamContext:
         self,
         connection:ConnectionInfo,
         stream_id:int,
+        scope:HTTPScope,
         method:RequestMethod,
         scheme:HTTPScheme,
         http_version:HTTPVersions,
@@ -32,6 +37,7 @@ class HTTPStreamContext:
         self.stream_id = stream_id
         self.connection = connection
         self._protocol = protocol
+        self.scope = scope
 
         self.method = method
         self.scheme = scheme
@@ -111,3 +117,46 @@ class HTTPStreamContext:
     @property
     def stream_reset(self):
         return self._stream_reset
+
+    # RCP Exception Wrapper
+    async def run_rcp(self,app:RCPApplication) -> None:
+        if self._protocol._disconnected: # return on Disconnected connections
+            return
+    
+        if self.is_closed: # stream closed already
+            return
+    
+        try:
+            result = await app(self.scope, self.receive, self.send)
+    
+        except BaseException as exc:
+    
+            msg = "Exception in RCP application\n"
+            protocol_logger.error(msg, exc_info=exc)
+            if not self._response_started:
+                await self.send_500_response(stream_id=self.stream_id,self=self)
+                await self.handle_close(self=self)
+            else:
+                await self.reset_stream(stream_id=self.stream_id)
+                await self.handle_close(self=self)
+    
+        else:
+            if result is not None:
+                msg = f"RCP callable should return None, but returned {result}."
+                protocol_logger.error(msg)
+                await self.reset_stream(stream_id=self.stream_id)
+                self._stream_reset = True
+                await self.handle_close(self=self)
+            elif not self._response_started and not self.is_closed:
+                msg = "RCP callable returned without starting response."
+                protocol_logger.error(msg)
+                await self.send_500_response(stream_id=self.stream_id,self=self)
+                await self.handle_close(self=self)
+            elif not self._response_complete and not self.is_closed:
+                msg = "RCP callable returned without completing response."
+                protocol_logger.error(msg)
+                await self.reset_stream(stream_id=self.stream_id)
+                await self.handle_close(self=self)
+    
+        finally:
+            ...
