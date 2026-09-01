@@ -440,40 +440,6 @@ class RivenConnection(QuicConnectionProtocol):
         return [
             (b":status", str(status_code).encode("ascii"))
         ]
-
-    async def send_500_response(self,stream_id:int,context:HTTPStreamContext) -> None: # send 500 Internal Server Error response to client
-
-        if not isinstance(context,HTTPStreamContext): # invalid stream context
-            raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
-
-        access_logger.error(
-            "",
-            extra={
-                "client_addr": context.connection.client,
-                "method": context.method,
-                "path": context._path,
-                "status_code": 500,
-            },
-        )
-
-        self._http.send_headers( # 500 error headers
-            stream_id=stream_id,
-            headers=[
-                (b":status", b"500"),
-                (b"content-type", b"text/plain"),
-                (b"content-length", b"21"),
-            ],
-            end_stream=False,
-        )
-        self._http.send_data( # 500 error body
-            stream_id=stream_id,
-            data=b"Internal Server Error",
-            end_stream=True,
-        )
-        self.transmit()
-
-        return
-
         
     def check_status(self, code: int) -> bool: # check if status code is in range of valid HTTP codes 100 to 599
         return 100 <= code <= 599
@@ -534,13 +500,3 @@ class RivenConnection(QuicConnectionProtocol):
                 )
             
         return True
-
-    async def reset_stream(self,stream_id:int,error:ErrorCode = ErrorCode.H3_INTERNAL_ERROR):
-        """Reset HTTP3 stream with H3_INTERNAL_ERROR"""
-        self._quic.reset_stream(stream_id=stream_id,error_code=error)
-        self.transmit()
-
-    async def handle_close(self,context:HTTPStreamContext):
-        """Close StreamContext and remove from active stream"""
-        await context.close()
-        self._active_streams.pop(context.stream_id, None)    

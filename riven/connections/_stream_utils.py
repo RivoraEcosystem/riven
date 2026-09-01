@@ -17,6 +17,7 @@ import logging
 from aioquic.h3.connection import (
     ErrorCode
 )
+from ..exceptions import exceptions
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
@@ -172,4 +173,34 @@ class HTTPStreamContext:
     async def handle_close(self):
         """Close StreamContext and remove from active stream"""
         await self.close()
-        self._protocol._active_streams.pop(self.stream_id, None)        
+        self._protocol._active_streams.pop(self.stream_id, None)   
+
+    async def send_500_response(self,stream_id:int) -> None: # send 500 Internal Server Error response to client
+    
+        access_logger.error(
+            "",
+            extra={
+                "client_addr": self.connection.client,
+                "method": self.method,
+                "path": self._path,
+                "status_code": 500,
+            },
+        )
+
+        self._protocol._http.send_headers( # 500 error headers
+            stream_id=stream_id,
+            headers=[
+                (b":status", b"500"),
+                (b"content-type", b"text/plain"),
+                (b"content-length", b"21"),
+            ],
+            end_stream=False,
+        )
+        self._protocol._http.send_data( # 500 error body
+            stream_id=stream_id,
+            data=b"Internal Server Error",
+            end_stream=True,
+        )
+        self._protocol.transmit()
+
+        return     
