@@ -1,9 +1,22 @@
 from rcp import (
-    RCPApplication,
-    RCPSendEvent,
-    RCPReceiveEvent,
+    HTTPScope,
+    ScopeType,
     HTTPVersions,
-    HTTPScope
+    HTTPSendEvents,
+    HTTPRequestEvent,
+    HTTPConnectionEventType,
+    HTTPDisconnectEvent,
+    RCPVersions,
+    RequestMethod,
+    HTTPScheme,
+    HTTPResponseEventType,
+    HTTPResponseStartEvent,
+    HTTPResponseBodyEvent,
+    HTTPResponseTrailersEvent,
+    HTTPDisconnectEvent,
+    RCPApplication,
+    RCPReceiveEvent,
+    RCPSendEvent
 )
 from rcp.methods import RequestMethod
 from rcp.scheme import HTTPScheme
@@ -18,6 +31,8 @@ from aioquic.h3.connection import (
     ErrorCode
 )
 from ..exceptions import exceptions
+from collections.abc import Iterable
+from typing import Literal
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
@@ -84,11 +99,6 @@ class HTTPStreamContext:
             return None
         
         return item
-
-    async def send(self,event:RCPSendEvent):
-        "Send function for RCPApplication which parses events and handle that event forward data accordingly"
-
-        return await self._protocol.handle_send_event(self.stream_id,event)
 
     async def receive(self) -> RCPReceiveEvent | None:
         "Receive function for RCPApplication which forward a event from request queue"
@@ -165,9 +175,9 @@ class HTTPStreamContext:
         finally:
             ...
 
-    async def reset_stream(self,stream_id:int,error:ErrorCode = ErrorCode.H3_INTERNAL_ERROR):
+    async def reset_stream(self,error:ErrorCode = ErrorCode.H3_INTERNAL_ERROR):
         """Reset HTTP3 stream with H3_INTERNAL_ERROR"""
-        self._protocol._quic.reset_stream(stream_id=stream_id,error_code=error)
+        self._protocol._quic.reset_stream(stream_id=self.stream_id,error_code=error)
         self._protocol.transmit()
 
     async def handle_close(self):
@@ -204,3 +214,138 @@ class HTTPStreamContext:
         self._protocol.transmit()
 
         return     
+
+    async def send(self,event:RCPSendEvent):
+        "Send function for RCPApplication which parses events and handle that event forward data accordingly"
+
+        if self._protocol._disconnected:
+            return
+
+        if self._response_complete: # response already completed
+            raise RuntimeError(f"RCP Violation - Unexpected RCP event response already completed.")
+
+        if self.is_closed:
+            raise RuntimeError(f"RCP Violation - Unexpected RCP Event stream closed.")
+
+        if event["type"] == HTTPResponseEventType.START:
+
+            event:HTTPResponseStartEvent = event
+
+            if self._response_started:
+                raise RuntimeError(f"RCP Violation - Headers already sent")
+            
+            status_code = event.get("status")
+            self.trailers_enabled = bool(event.get("trailers", False))
+            headers = event.get("headers")
+
+
+            self.validate_rcp_response_start_fields(
+                event=event,
+                status_code=status_code,
+                stream_id=self.stream_id,
+                headers=headers
+            )
+
+            pseudo_headers = self.construct_pseudo_headers(self._response_status_code) # construct pseduo headers for HTTP3 response
+
+            new_headers = list(headers)
+            new_headers.extend(pseudo_headers)
+
+            
+            self._protocol._http.send_headers(stream_id=self.stream_id,headers=new_headers,end_stream=False)
+
+            self._response_status_code = status_code
+            self._response_started = True
+
+            self._protocol.transmit()
+
+            return
+
+
+        elif event["type"] == HTTPResponseEventType.BODY:
+
+            event:HTTPResponseBodyEvent = event
+
+            if not self._response_started: # Body arrived before headers
+                raise RuntimeError("RCP Violation - Response not started")
+
+            body:bytes = event.get("body")
+            more_body:bool = bool(event.get('more_body',False)) # assume no more body as False as more body is optional
+
+            if not isinstance(body,bytes):
+                raise exceptions.InvalidEventField(
+                    field="body",
+                    got=type(event['body']),
+                    expected=bytes,
+                )
+            
+            end_stream = not more_body and not self.trailers_enabled # end stream only when there is no more body and there are no trailers
+            self._protocol._http.send_data(stream_id=self.stream_id,data=body,end_stream=end_stream)
+            self._protocol.transmit()
+
+            if not more_body:
+                self._response_body_sent = True
+            self._response_complete = end_stream
+                    
+        elif event["type"] == HTTPResponseEventType.TRAILERS:
+            ...
+        elif event["type"] == HTTPConnectionEventType.DISCONNECT:
+            ...
+        else:
+            raise RuntimeError(f"RCP Violation - Unexpected '{event["type"]}' event sent")
+
+    def construct_pseudo_headers(self,status_code: int) -> list[tuple[bytes, bytes]]:
+            return [
+                (b":status", str(status_code).encode("ascii"))
+            ]
+            
+    def check_status(self, code: int) -> bool: # check if status code is in range of valid HTTP codes 100 to 599
+        return 100 <= code <= 599
+
+    def validate_rcp_response_start_fields(self,event:HTTPResponseStartEvent,)-> Literal[True]:
+
+        """Check and validate rcp event fields"""
+        
+        if not isinstance(event['status'],int): # Status code validation 
+            raise exceptions.InvalidEventField(
+                field="status",
+                got=type(event["status"]),
+                expected=int,
+            )
+        
+        if not self.check_status(event['status']):
+            raise exceptions.InvalidStatusCode(f"Invalid HTTP Status code: {event['status']}")
+        
+        if event['headers'] is None:
+            raise exceptions.InvalidEventField(
+                field="headers",
+                got=type(event['headers']),
+                expected=Iterable
+            )
+        
+        for header in event['headers']:
+
+            if not isinstance(header, tuple) or len(header) != 2:
+                raise exceptions.InvalidEventField(
+                    field="headers",
+                    got=type(header),
+                    expected=tuple,
+                )
+            
+            name, value = header
+
+            if not isinstance(name, bytes):
+                raise exceptions.InvalidEventField(
+                    field="header name",
+                    got=type(name),
+                    expected=bytes,
+                )
+            
+            if not isinstance(value, bytes):
+                raise exceptions.InvalidEventField(
+                    field="header value",
+                    got=type(value),
+                    expected=bytes,
+                )
+            
+        return True
