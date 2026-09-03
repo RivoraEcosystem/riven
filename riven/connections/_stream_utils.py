@@ -37,7 +37,7 @@ from typing import Literal
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
 
-class HTTPStreamContext:
+class HTTPStream:
 
     EOF = object() # EOF object for marking request's end 
 
@@ -147,31 +147,29 @@ class HTTPStreamContext:
             protocol_logger.error(msg, exc_info=exc)
             if not self._response_started:
                 await self.send_500_response(stream_id=self.stream_id,self=self)
-                await self.handle_close(self=self)
             else:
-                await self.reset_stream(stream_id=self.stream_id)
-                await self.handle_close(self=self)
+                await self.reset_stream()
     
         else:
             if result is not None:
                 msg = f"RCP callable should return None, but returned {result}."
                 protocol_logger.error(msg)
-                await self.reset_stream(stream_id=self.stream_id)
+                await self.reset_stream()
                 self._stream_reset = True
-                await self.handle_close(self=self)
             elif not self._response_started and not self.is_closed:
                 msg = "RCP callable returned without starting response."
                 protocol_logger.error(msg)
                 await self.send_500_response(stream_id=self.stream_id,self=self)
-                await self.handle_close(self=self)
             elif not self._response_complete and not self.is_closed:
                 msg = "RCP callable returned without completing response."
                 protocol_logger.error(msg)
-                await self.reset_stream(stream_id=self.stream_id)
-                await self.handle_close(self=self)
+                await self.reset_stream()
     
         finally:
-            ...
+            if not self._stream_reset:
+                await self.reset_stream()
+            await self.handle_close(self=self) # close stream at last
+            
 
     async def reset_stream(self,error:ErrorCode = ErrorCode.H3_INTERNAL_ERROR):
         """Reset HTTP3 stream with H3_INTERNAL_ERROR"""

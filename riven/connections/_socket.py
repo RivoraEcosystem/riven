@@ -35,7 +35,7 @@ from rcp import (
     RCPApplication
 )
 from ..server import Riven
-from ._stream_utils import HTTPStreamContext , ConnectionInfo
+from ._stream_utils import HTTPStream , ConnectionInfo
 import asyncio
 from ..exceptions import exceptions
 from typing import Any
@@ -50,13 +50,12 @@ protocol_logger = logging.getLogger("riven.protocol")
 class RivenConnection(QuicConnectionProtocol):
     def __init__(self ,manager:Riven ,*args ,**kwargs):
         super().__init__(*args, **kwargs)
+        self.connection_id = self._quic.host_cid
         self._manager = manager
-        self._active_streams:dict[int,HTTPStreamContext] = dict()
+        self._active_streams:dict[int,HTTPStream] = dict()
         self._http = None
         self._manager.add_connection(self)
         self._disconnected = False
-        
-
 
     def quic_event_received(self, event):
         if isinstance(event, ProtocolNegotiated):
@@ -207,7 +206,7 @@ class RivenConnection(QuicConnectionProtocol):
             client=client,
         )
 
-        stream_context = HTTPStreamContext( # build http stream context
+        stream_context = HTTPStream( # build http stream context
             connection=connection,
             stream_id=event.stream_id,
             scope=http_scope,
@@ -245,8 +244,8 @@ class RivenConnection(QuicConnectionProtocol):
             # Stream already closed/reset or unknown stream
             return
 
-        if not isinstance(context,HTTPStreamContext):
-            raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
+        if not isinstance(context,HTTPStream):
+            raise exceptions.InvalidStreamContext(context,HTTPStream)
 
         await context._push_request(request_body)
 
@@ -260,6 +259,7 @@ class RivenConnection(QuicConnectionProtocol):
         """Handle an HTTP/3 connection termination by scheduling cleanup for all active streams."""
         if not isinstance(event,ConnectionTerminated):
             raise exceptions.InvalidEvent(event)
+        self._disconnected = True
 
         active = [c for c in self._active_streams.values() if not c.is_closed]
 
@@ -271,24 +271,19 @@ class RivenConnection(QuicConnectionProtocol):
         for context, result in zip(active, results):
 
             if isinstance(result,Exception):
-                ... # add logging logic after adding logging
+                protocol_logger.error("Exception while closing stream %s after connection termination",context.stream_id,exc_info=result)
                  
-        self._disconnected = True
+        
         self._manager._active_connections.pop(self._quic.host_cid,None) # remove connection manager
 
     async def _close_stream(
         self,
-        context:HTTPStreamContext
+        context:HTTPStream
     ):
         """Gracefully close an HTTP stream after a client disconnect."""
         disconnect_event:HTTPDisconnectEvent = {"type":HTTPConnectionEventType.DISCONNECT}
         if not context.request_complete:
             await context._push_request(disconnect_event)
-
-        await asyncio.sleep(15) 
-        await context.close()
-
-        self._active_streams.pop(context.stream_id, None)
 
     async def _handle_stream_interrupt(self,event: StopSendingReceived | StreamReset):
         if not isinstance(event, (StreamReset, StopSendingReceived)):
@@ -300,8 +295,8 @@ class RivenConnection(QuicConnectionProtocol):
             # Stream already closed/reset or unknown stream
             return
     
-        if not isinstance(context,HTTPStreamContext):
-            raise exceptions.InvalidStreamContext(context,HTTPStreamContext)
+        if not isinstance(context,HTTPStream):
+            raise exceptions.InvalidStreamContext(context,HTTPStream)
 
         await self._close_stream(context=context) # close stream by sending HTTPDisconnectEvent using _close_stream
 

@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+STARTUP_SHUTDOWN_FAILURE = 3
+
 # Server config
 @dataclass(slots=True)
 class RivenConfig:

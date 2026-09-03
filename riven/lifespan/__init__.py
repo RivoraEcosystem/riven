@@ -1,6 +1,6 @@
-from .lifespan import LifespanContext , LifespanState
+from .lifespan import LifeSpan , LifespanState
 
 __all__ = [
-    "LifespanContext",
+    "LifeSpan",
     "LifespanState"
 ]
