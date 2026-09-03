@@ -247,10 +247,10 @@ class RivenConnection(QuicConnectionProtocol):
         if not isinstance(context,HTTPStream):
             raise exceptions.InvalidStreamContext(context,HTTPStream)
 
-        await context._push_request(request_body)
+        await context._push_to_queue(request_body)
 
         if event.stream_ended:
-            await context._finish_request()
+            context._request_complete = True
 
     async def _schedule_disconnect(
         self,
@@ -282,8 +282,8 @@ class RivenConnection(QuicConnectionProtocol):
     ):
         """Gracefully close an HTTP stream after a client disconnect."""
         disconnect_event:HTTPDisconnectEvent = {"type":HTTPConnectionEventType.DISCONNECT}
-        if not context.request_complete:
-            await context._push_request(disconnect_event)
+
+        await context.push_event(disconnect_event)
 
     async def _handle_stream_interrupt(self,event: StopSendingReceived | StreamReset):
         if not isinstance(event, (StreamReset, StopSendingReceived)):

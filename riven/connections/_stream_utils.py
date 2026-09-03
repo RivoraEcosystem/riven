@@ -39,8 +39,6 @@ protocol_logger = logging.getLogger("riven.protocol")
 
 class HTTPStream:
 
-    EOF = object() # EOF object for marking request's end 
-
     def __init__(
         self,
         connection:ConnectionInfo,
@@ -63,7 +61,11 @@ class HTTPStream:
         self.http_version = http_version
         self._protocol = protocol
         self._path = path
-        self._request_queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
+        self._queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
+
+        self._push_status = asyncio.Event() # event for push
+        self._push_status.set()
+        self._push_event:RCPReceiveEvent|None = None
 
         self.task:asyncio.Task = None
 
@@ -80,39 +82,54 @@ class HTTPStream:
         
         self.trailers_enabled:bool = False # Whether the application declared that trailers will be sent
 
-    async def _push_request(self, data:RCPReceiveEvent) -> None:
-        "Add data to request queue buffer"
+    async def _push_to_queue(self, data:RCPReceiveEvent) -> None:
+        "Add data to queue buffer"
 
-        await self._request_queue.put(data)
+        await self._queue.put(data)
 
-    async def _finish_request(self) -> None:
-        "Add none at last to mark request data ending"
-
-        await self._request_queue.put(self.EOF)
-        self._request_queue.shutdown(immediate=False)
-        self._request_complete = True
-
-    async def _pop_request(self) -> RCPReceiveEvent | None:
+    async def _pop_from_queue(self) -> RCPReceiveEvent | None:
         "Read from request queue buffer to free up queue"
         
-        item = await self._request_queue.get()
+        item = await self._queue.get()
     
-        if item is self.EOF: # check if item is EOF then return None
-            return None
-        
         return item
 
     async def receive(self) -> RCPReceiveEvent | None:
         "Receive function for RCPApplication which forward a event from request queue"
 
-        return await self._pop_request()
+        if self._push_event is not None:
+            return await self.get_push()
+
+        return await self._pop_from_queue()
+
+    async def push_event(self,event:RCPReceiveEvent) -> None:
+        if event is None:
+            return
+
+        if self._push_event is not None:
+            await self._push_status.wait() # wait for existing event 
+
+        self._push_event = event
+
+        self._push_status.clear() # reset event to make futher setters wait
+
+    async def get_push(self) -> RCPReceiveEvent:
+        if self._push_event is None:
+            raise RuntimeError("No Push event")
+
+        event = self._push_event
+        self._push_event = None
+
+        self._push_status.set()
+        return event
+
 
     async def close(self):
         if self._closed:
             return
 
         self._closed = True
-        self._request_queue.shutdown(immediate=True) # shutdown queue immediately
+        self._queue.shutdown(immediate=True) # shutdown queue immediately
 
     @property
     def is_closed(self):
