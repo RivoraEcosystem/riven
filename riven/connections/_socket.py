@@ -1,3 +1,4 @@
+from __future__ import annotations
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.events import (
     ProtocolNegotiated,
@@ -34,7 +35,6 @@ from rcp import (
     HTTPDisconnectEvent,
     RCPApplication
 )
-from ..server import Riven
 from ._stream_utils import HTTPStream , ConnectionInfo
 import asyncio
 from ..exceptions import exceptions
@@ -42,7 +42,11 @@ from typing import Any
 from rcp.events import Headers
 from collections.abc import Iterable
 import logging
-from typing import Literal
+from typing import Literal , TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..server import Riven
+
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")

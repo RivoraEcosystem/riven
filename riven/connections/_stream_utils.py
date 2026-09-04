@@ -1,3 +1,4 @@
+from __future__ import annotations
 from rcp import (
     HTTPScope,
     ScopeType,
@@ -21,7 +22,7 @@ from rcp import (
 from rcp.methods import RequestMethod
 from rcp.scheme import HTTPScheme
 import asyncio
-from _connection_utils import ConnectionInfo
+from ._connection_utils import ConnectionInfo
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ._socket import RivenConnection

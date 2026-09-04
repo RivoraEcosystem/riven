@@ -22,7 +22,7 @@ from rcp.rcp import RCPVersions
 from rcp.methods import RequestMethod
 from rcp.scheme import HTTPScheme
 
-from connections import (
+from .connections import (
     RivenConnection,
     ConnectionInfo,
     HTTPStream,
