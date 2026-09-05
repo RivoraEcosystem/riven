@@ -22,10 +22,10 @@ from rcp.rcp import RCPVersions
 from rcp.methods import RequestMethod
 from rcp.scheme import HTTPScheme
 
-from .connections import (
-    RivenConnection,
+from .protocol_h3 import (
+    RivenH3,
     ConnectionInfo,
-    HTTPStream,
+    HTTP3Stream,
 )
 
 from .exceptions.exceptions import (
@@ -37,7 +37,7 @@ from .exceptions.exceptions import (
     InvalidScheme,
     InvalidAuthority,
     InvalidPath,
-    InvalidStreamContext,
+    InvalidStream,
     InvalidLifespanState,
     LifespanAlreadyCompleted,
     LifespanNotStarted
@@ -67,14 +67,14 @@ class Riven: # server connection manager
     ):
         self._application = app
         self.config = config
-        self._active_connections:dict[bytes,RivenConnection] = dict()
+        self._active_connections:dict[bytes,RivenH3] = dict()
         self.state:dict[str,Any] | None = None
         self.extensions:dict[str, dict[object, object]] | None = None
 
         self.lifespan: LifeSpan | None = None
         self.root_path = config.root_path
 
-    def add_connection(self,connection:RivenConnection) -> None:
+    def add_connection(self,connection:RivenH3) -> None:
         self._active_connections[connection.connection_id] = connection
 
     async def start_lifespan(self):

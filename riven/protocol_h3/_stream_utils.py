@@ -25,7 +25,7 @@ import asyncio
 from ._connection_utils import ConnectionInfo
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from ._socket import RivenConnection
+    from ._protocol import RivenH3
 from dataclasses import dataclass
 import logging
 from aioquic.h3.connection import (
@@ -38,7 +38,7 @@ from typing import Literal
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
 
-class HTTPStream:
+class HTTP3Stream:
 
     def __init__(
         self,
@@ -48,7 +48,7 @@ class HTTPStream:
         method:RequestMethod,
         scheme:HTTPScheme,
         http_version:HTTPVersions,
-        protocol:RivenConnection,
+        protocol:RivenH3,
         path:str,
         max_queue_size:int|None=0
         ) -> None:
