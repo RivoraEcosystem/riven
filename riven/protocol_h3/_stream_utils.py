@@ -40,6 +40,31 @@ protocol_logger = logging.getLogger("riven.protocol")
 
 class HTTP3Stream:
 
+    _CLOSED = 1 << 0
+    _REQUEST_COMPLETE = 1 << 1
+    _RESPONSE_STARTED = 1 << 2
+    _RESPONSE_BODY_SENT = 1 << 3
+    _RESPONSE_COMPLETE = 1 << 4
+    _STREAM_RESET = 1 << 5
+    _TRAILERS_ENABLED = 1 << 6
+
+    __slots__ = (
+        "connection",
+        "stream_id",
+        "scope",
+        "method",
+        "scheme",
+        "http_version",
+        "_protocol",
+        "_path",
+        "_queue",
+        "_flags",
+        "_push_status",
+        "_push_event",
+        "task",
+        "_response_status_code",
+    )
+
     def __init__(
         self,
         connection:ConnectionInfo,
@@ -52,7 +77,7 @@ class HTTP3Stream:
         path:str,
         max_queue_size:int|None=0
         ) -> None:
-
+    
         self.connection = connection
         self.stream_id = stream_id
         
@@ -63,25 +88,81 @@ class HTTP3Stream:
         self._protocol = protocol
         self._path = path
         self._queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
-
+    
+        self._flags:int = 0
+    
         self._push_status = asyncio.Event() # event for push
         self._push_status.set()
         self._push_event:RCPReceiveEvent|None = None
-
+    
         self.task:asyncio.Task = None
-
-        self._closed = False
-
-        self._request_complete = False
-
+    
         self._response_status_code:int|None = None
-        self._response_started:bool = False        
-        self._response_body_sent: bool = False
-        self._response_complete:bool = False
 
-        self._stream_reset: bool = False
-        
-        self.trailers_enabled:bool = False # Whether the application declared that trailers will be sent
+    @property
+    def _closed(self) -> bool:
+        return self._get_flag(self._CLOSED)
+
+    @_closed.setter
+    def _closed(self,value:bool) -> None:
+        self._set_flag(self._CLOSED, value)
+
+    @property
+    def _request_complete(self):
+        return self._get_flag(self._REQUEST_COMPLETE)
+
+    @_request_complete.setter
+    def _request_complete(self,value:bool) -> None:
+        self._set_flag(self._REQUEST_COMPLETE, value)    
+
+    @property
+    def _response_started(self):
+        return self._get_flag(self._RESPONSE_STARTED)
+
+    @_response_started.setter
+    def _response_started(self,value:bool) -> None:
+        self._set_flag(self._RESPONSE_STARTED, value)    
+
+    @property
+    def _response_body_sent(self):
+        return self._get_flag(self._RESPONSE_BODY_SENT)
+
+    @_response_body_sent.setter
+    def _response_body_sent(self,value:bool) -> None:
+        self._set_flag(self._RESPONSE_BODY_SENT, value)    
+
+    @property
+    def _response_complete(self):
+        return self._get_flag(self._RESPONSE_COMPLETE)
+
+    @_response_complete.setter
+    def _response_complete(self,value:bool) -> None:
+        self._set_flag(self._RESPONSE_COMPLETE, value)    
+
+    @property
+    def _stream_reset(self):
+        return self._get_flag(self._STREAM_RESET)
+
+    @_stream_reset.setter
+    def _stream_reset(self,value:bool) -> None:
+        self._set_flag(self._STREAM_RESET, value)    
+
+    @property
+    def trailers_enabled(self):
+        return self._get_flag(self._TRAILERS_ENABLED)
+
+    @trailers_enabled.setter
+    def trailers_enabled(self,value:bool) -> None:
+        self._set_flag(self._TRAILERS_ENABLED, value)
+
+    def _get_flag(self,mask:int) -> bool:
+            return bool(self._flags & mask)
+    
+    def _set_flag(self, mask: int, value: bool) -> None:
+        if value:
+            self._flags |= mask
+        else:
+            self._flags &= ~mask
 
     async def _push_to_queue(self, data:RCPReceiveEvent) -> None:
         "Add data to queue buffer"
@@ -132,28 +213,12 @@ class HTTP3Stream:
         self._closed = True
         self._queue.shutdown(immediate=True) # shutdown queue immediately
 
-    @property
-    def is_closed(self):
-        return self._closed
-
-    @property
-    def request_complete(self):
-        return self._request_complete
-
-    @property
-    def response_body_sent(self):
-        return self._response_body_sent
-
-    @property
-    def stream_reset(self):
-        return self._stream_reset
-
     # RCP Exception Wrapper
     async def run_rcp(self,app:RCPApplication) -> None:
         if self._protocol._disconnected: # return on Disconnected connections
             return
     
-        if self.is_closed: # stream closed already
+        if self._closed: # stream closed already
             return
     
         try:
@@ -173,26 +238,29 @@ class HTTP3Stream:
                 msg = f"RCP callable should return None, but returned {result}."
                 protocol_logger.error(msg)
                 await self.reset_stream()
-                self._stream_reset = True
-            elif not self._response_started and not self.is_closed:
+            elif not self._response_started and not self._closed:
                 msg = "RCP callable returned without starting response."
                 protocol_logger.error(msg)
                 await self.send_500_response(stream_id=self.stream_id,self=self)
-            elif not self._response_complete and not self.is_closed:
+            elif not self._response_complete and not self._closed:
                 msg = "RCP callable returned without completing response."
                 protocol_logger.error(msg)
                 await self.reset_stream()
     
         finally:
-            if not self._stream_reset:
+            if not self._response_complete and not self._stream_reset:
                 await self.reset_stream()
-            await self.handle_close(self=self) # close stream at last
+            await self.handle_close() # close stream at last
             
 
     async def reset_stream(self,error:ErrorCode = ErrorCode.H3_INTERNAL_ERROR):
         """Reset HTTP3 stream with H3_INTERNAL_ERROR"""
+        if self._stream_reset:
+            return
+        
         self._protocol._quic.reset_stream(stream_id=self.stream_id,error_code=error)
         self._protocol.transmit()
+        self._stream_reset = True
 
     async def handle_close(self):
         """Close StreamContext and remove from active stream"""
@@ -238,7 +306,7 @@ class HTTP3Stream:
         if self._response_complete: # response already completed
             raise RuntimeError(f"RCP Violation - Unexpected RCP event response already completed.")
 
-        if self.is_closed:
+        if self._closed:
             raise RuntimeError(f"RCP Violation - Unexpected RCP Event stream closed.")
 
         if event["type"] == HTTPResponseEventType.START:
