@@ -38,17 +38,17 @@ class DefaultFormatter(logging.Formatter):
         )
 
     def format(self, record: logging.LogRecord) -> str:
-        record = copy(record)
+        recordcopy = copy(record)
 
-        level = f"{record.levelname:<9}"
+        level = f"{recordcopy.levelname:<9}"
 
-        record.__dict__["levelprefix"] = colorize(
+        recordcopy.__dict__["levelprefix"] = colorize(
             level,
-            level_color(record.levelno),
+            level_color(recordcopy.levelno),
             self.use_colors,
         )
 
-        return super().format(record)
+        return super().format(recordcopy)
 
 
 class AccessFormatter(DefaultFormatter):
@@ -57,28 +57,23 @@ class AccessFormatter(DefaultFormatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        record = copy(record)
+        recordcopy = copy(record)
 
-        level = f"{record.levelname:<9}"
-
-        record.__dict__["levelprefix"] = colorize(
-            level,
-            level_color(record.levelno),
-            self.use_colors,
-        )
-
-        method = record.__dict__.get("method")
-        status_code = record.__dict__.get("status_code")
+        (client_addr,
+         method,
+         full_path,
+         http_version,
+         status_code) = recordcopy.args
 
         if method is not None:
-            record.__dict__["method"] = colorize(
+            method = colorize(
                 str(method),
                 method_color(str(method)),
                 self.use_colors,
             )
 
         if status_code:
-            record.__dict__["status_code"] = (
+            status_code = (
                 f"{colorize(
                     str(status_code),
                     status_color(int(status_code)),
@@ -86,9 +81,15 @@ class AccessFormatter(DefaultFormatter):
                 )} {status_phrase(int(status_code))}"
             )
         else:
-            record.__dict__["status_code"] = ""
+            status_code = ""
 
-        request_line = f"{record.__dict__["path"]} {record.__dict__["http_version"]}"
-        record.__dict__["request_line"] = request_line
+        request_line = f"{method} {full_path} HTTP/{http_version}"
+        recordcopy.__dict__.update(
+            {
+                "client_addr" : client_addr,
+                "request_line" : request_line,
+                "status_code" : status_code
+            }
+        )
 
-        return super(DefaultFormatter, self).format(record)
+        return super().format(recordcopy)

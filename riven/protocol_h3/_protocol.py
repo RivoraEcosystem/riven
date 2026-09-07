@@ -275,7 +275,7 @@ class RivenH3(QuicConnectionProtocol):
         for context, result in zip(active, results):
 
             if isinstance(result,Exception):
-                protocol_logger.error("Exception while closing stream %s after connection termination",context.stream_id,exc_info=result)
+                protocol_logger.error("Exception while closing stream %d after connection termination",context.stream_id,exc_info=result)
                  
         
         self._manager._active_connections.pop(self._quic.host_cid,None) # remove connection manager

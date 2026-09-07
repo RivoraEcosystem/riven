@@ -52,11 +52,7 @@ class HTTP3Stream:
         "connection",
         "stream_id",
         "scope",
-        "method",
-        "scheme",
-        "http_version",
         "_protocol",
-        "_path",
         "_queue",
         "_flags",
         "_push_status",
@@ -70,23 +66,14 @@ class HTTP3Stream:
         connection:ConnectionInfo,
         stream_id:int,
         scope:HTTPScope,
-        method:RequestMethod,
-        scheme:HTTPScheme,
-        http_version:HTTPVersions,
         protocol:RivenH3,
-        path:str,
         max_queue_size:int|None=0
         ) -> None:
-    
         self.connection = connection
         self.stream_id = stream_id
         
         self.scope = scope
-        self.method = method
-        self.scheme = scheme
-        self.http_version = http_version
         self._protocol = protocol
-        self._path = path
         self._queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
     
         self._flags:int = 0
@@ -268,15 +255,14 @@ class HTTP3Stream:
         self._protocol._active_streams.pop(self.stream_id, None)   
 
     async def send_500_response(self,stream_id:int) -> None: # send 500 Internal Server Error response to client
-    
+
         access_logger.error(
-            "",
-            extra={
-                "client_addr": self.connection.client,
-                "method": self.method,
-                "path": self._path,
-                "status_code": 500,
-            },
+            '%s - "%s %s HTTP/%s" %d',
+            self.get_client_addr(self.scope),
+            self.scope['method'],
+            self.get_full_path(self.scope),
+            self.scope['http_version'],
+            500,
         )
 
         self._protocol._http.send_headers( # 500 error headers
@@ -431,3 +417,24 @@ class HTTP3Stream:
                 )
             
         return True
+
+    def get_client_addr(self, scope: HTTPScope) -> str:
+        client = scope.get("client")
+        if not client:
+            return ""
+    
+        return "%s:%d" % client
+    
+    
+    def get_full_path(self, scope: HTTPScope) -> str:
+        raw_path = scope.get("raw_path")
+        if raw_path:
+            return raw_path.decode("utf-8")
+    
+        path = scope.get("path", "")
+        query_string = scope.get("query_string", b"")
+    
+        if query_string:
+            return f"{path}?{query_string.decode('utf-8')}"
+    
+        return path
