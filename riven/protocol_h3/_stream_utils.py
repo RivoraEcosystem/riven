@@ -14,13 +14,11 @@ from rcp import (
     HTTPResponseStartEvent,
     HTTPResponseBodyEvent,
     HTTPResponseTrailersEvent,
-    HTTPDisconnectEvent,
     RCPApplication,
     RCPReceiveEvent,
     RCPSendEvent
 )
-from rcp.methods import RequestMethod
-from rcp.scheme import HTTPScheme
+
 import asyncio
 from ._connection_utils import ConnectionInfo
 from typing import TYPE_CHECKING
@@ -82,7 +80,7 @@ class HTTP3Stream:
         self._push_status.set()
         self._push_event:RCPReceiveEvent|None = None
     
-        self.task:asyncio.Task = None
+        self.task: asyncio.Task | None = None
     
         self._response_status_code:int|None = None
 
@@ -95,7 +93,7 @@ class HTTP3Stream:
         self._set_flag(self._CLOSED, value)
 
     @property
-    def _request_complete(self):
+    def _request_complete(self) -> bool:
         return self._get_flag(self._REQUEST_COMPLETE)
 
     @_request_complete.setter
@@ -103,7 +101,7 @@ class HTTP3Stream:
         self._set_flag(self._REQUEST_COMPLETE, value)    
 
     @property
-    def _response_started(self):
+    def _response_started(self) -> bool:
         return self._get_flag(self._RESPONSE_STARTED)
 
     @_response_started.setter
@@ -111,7 +109,7 @@ class HTTP3Stream:
         self._set_flag(self._RESPONSE_STARTED, value)    
 
     @property
-    def _response_body_sent(self):
+    def _response_body_sent(self) -> bool:
         return self._get_flag(self._RESPONSE_BODY_SENT)
 
     @_response_body_sent.setter
@@ -119,7 +117,7 @@ class HTTP3Stream:
         self._set_flag(self._RESPONSE_BODY_SENT, value)    
 
     @property
-    def _response_complete(self):
+    def _response_complete(self) -> bool:
         return self._get_flag(self._RESPONSE_COMPLETE)
 
     @_response_complete.setter
@@ -127,7 +125,7 @@ class HTTP3Stream:
         self._set_flag(self._RESPONSE_COMPLETE, value)    
 
     @property
-    def _stream_reset(self):
+    def _stream_reset(self) -> bool:
         return self._get_flag(self._STREAM_RESET)
 
     @_stream_reset.setter
@@ -135,7 +133,7 @@ class HTTP3Stream:
         self._set_flag(self._STREAM_RESET, value)    
 
     @property
-    def trailers_enabled(self):
+    def trailers_enabled(self) -> bool:
         return self._get_flag(self._TRAILERS_ENABLED)
 
     @trailers_enabled.setter
@@ -172,8 +170,8 @@ class HTTP3Stream:
         return await self._pop_from_queue()
 
     async def push_event(self,event:RCPReceiveEvent) -> None:
-        if event is None:
-            return
+        if event is None or self._closed:
+            return  
 
         if self._push_event is not None:
             await self._push_status.wait() # wait for existing event 
@@ -198,6 +196,8 @@ class HTTP3Stream:
             return
 
         self._closed = True
+        self._push_status.set()
+        self._push_event = None
         self._queue.shutdown(immediate=True) # shutdown queue immediately
 
     # RCP Exception Wrapper
@@ -216,7 +216,7 @@ class HTTP3Stream:
             msg = "Exception in RCP application\n"
             protocol_logger.error(msg, exc_info=exc)
             if not self._response_started:
-                await self.send_500_response(stream_id=self.stream_id,self=self)
+                await self.send_500_response()
             else:
                 await self.reset_stream()
     
@@ -228,7 +228,7 @@ class HTTP3Stream:
             elif not self._response_started and not self._closed:
                 msg = "RCP callable returned without starting response."
                 protocol_logger.error(msg)
-                await self.send_500_response(stream_id=self.stream_id,self=self)
+                await self.send_500_response()
             elif not self._response_complete and not self._closed:
                 msg = "RCP callable returned without completing response."
                 protocol_logger.error(msg)
@@ -242,7 +242,7 @@ class HTTP3Stream:
 
     async def reset_stream(self,error:ErrorCode = ErrorCode.H3_INTERNAL_ERROR):
         """Reset HTTP3 stream with H3_INTERNAL_ERROR"""
-        if self._stream_reset:
+        if self._stream_reset or self._protocol._disconnected:
             return
         
         self._protocol._quic.reset_stream(stream_id=self.stream_id,error_code=error)
@@ -254,34 +254,26 @@ class HTTP3Stream:
         await self.close()
         self._protocol._active_streams.pop(self.stream_id, None)   
 
-    async def send_500_response(self,stream_id:int) -> None: # send 500 Internal Server Error response to client
-
-        access_logger.error(
-            '%s - "%s %s HTTP/%s" %d',
-            self.get_client_addr(self.scope),
-            self.scope['method'],
-            self.get_full_path(self.scope),
-            self.scope['http_version'],
-            500,
-        )
-
-        self._protocol._http.send_headers( # 500 error headers
-            stream_id=stream_id,
-            headers=[
-                (b":status", b"500"),
+    async def send_500_response(self) -> None: # send 500 Internal Server Error response to client
+        error_response_start:HTTPResponseStartEvent={
+            "type" : HTTPResponseEventType.START,
+            "status" : 500,
+            "headers" : [
                 (b"content-type", b"text/plain"),
                 (b"content-length", b"21"),
-            ],
-            end_stream=False,
-        )
-        self._protocol._http.send_data( # 500 error body
-            stream_id=stream_id,
-            data=b"Internal Server Error",
-            end_stream=True,
-        )
-        self._protocol.transmit()
+            ]
+        }
 
-        return     
+        await self.send(error_response_start)
+
+        error_response_body: HTTPResponseBodyEvent = {
+            "type" : HTTPResponseEventType.BODY,
+            "body" : b"Internal Server Error",
+            "more_body" : False
+        }
+
+        await self.send(error_response_body)
+ 
 
     async def send(self,event:RCPSendEvent):
         "Send function for RCPApplication which parses events and handle that event forward data accordingly"
@@ -302,25 +294,16 @@ class HTTP3Stream:
             if self._response_started:
                 raise RuntimeError(f"RCP Violation - Headers already sent")
             
-            status_code = event.get("status")
+            status_code = event["status"]
             self.trailers_enabled = bool(event.get("trailers", False))
-            headers = event.get("headers")
+            headers = list(event.get("headers",[]))
 
 
-            self.validate_rcp_response_start_fields(
-                event=event,
-                status_code=status_code,
-                stream_id=self.stream_id,
-                headers=headers
-            )
+            self.validate_rcp_response_start_fields(event=event,headers=headers)
 
-            pseudo_headers = self.construct_pseudo_headers(status_code) # construct pseduo headers for HTTP3 response
-
-            new_headers = list(headers)
-            new_headers.extend(pseudo_headers)
-
+            headers = self.construct_pseudo_headers(status_code) + headers # construct pseduo headers for HTTP3 response and add at start of list
             
-            self._protocol._http.send_headers(stream_id=self.stream_id,headers=new_headers,end_stream=False)
+            self._protocol._http.send_headers(stream_id=self.stream_id,headers=headers,end_stream=False)
 
             self._response_status_code = status_code
             self._response_started = True
@@ -337,7 +320,7 @@ class HTTP3Stream:
             if not self._response_started: # Body arrived before headers
                 raise RuntimeError("RCP Violation - Response not started")
 
-            body:bytes = event.get("body")
+            body:bytes = event.get("body", b"")
             more_body:bool = bool(event.get('more_body',False)) # assume no more body as False as more body is optional
 
             if not isinstance(body,bytes):
@@ -354,13 +337,49 @@ class HTTP3Stream:
             if not more_body:
                 self._response_body_sent = True
             self._response_complete = end_stream
+
+            status = self._response_status_code
+            if self._response_complete:
+                access_logger.info(
+                    '%s - "%s %s HTTP/%s" %d',
+                    self.get_client_addr(self.scope),
+                    self.scope['method'],
+                    self.get_full_path(self.scope),
+                    self.scope['http_version'],
+                    status,
+                )
                     
         elif event["type"] == HTTPResponseEventType.TRAILERS:
-            ...
-        elif event["type"] == HTTPConnectionEventType.DISCONNECT:
-            ...
+            if not self.trailers_enabled:
+                raise RuntimeError("RCP Violation - Response TRAILERS not enabled at Response start")
+
+            if not self._response_body_sent:
+                raise RuntimeError(
+                    "RCP Violation - Response body not completed before trailers"
+            )
+
+            headers = list(event.get('headers',[]))
+            more_trailers:bool = bool(event.get('more_trailers',False))
+
+            self.validate_headers(headers=headers)
+
+            self._protocol._http.send_headers(stream_id=self.stream_id,headers=headers,end_stream= not more_trailers)
+            self._protocol.transmit()
+
+            self._response_complete = (not more_trailers)
+            if self._response_complete:
+                status = self._response_status_code
+                access_logger.info(
+                    '%s - "%s %s HTTP/%s" %d',
+                    self.get_client_addr(self.scope),
+                    self.scope['method'],
+                    self.get_full_path(self.scope),
+                    self.scope['http_version'],
+                    status,
+                )
+
         else:
-            raise RuntimeError(f"RCP Violation - Unexpected '{event["type"]}' event sent")
+            raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent")
 
     def construct_pseudo_headers(self,status_code: int) -> list[tuple[bytes, bytes]]:
             return [
@@ -370,10 +389,10 @@ class HTTP3Stream:
     def check_status(self, code: int) -> bool: # check if status code is in range of valid HTTP codes 100 to 599
         return 100 <= code <= 599
 
-    def validate_rcp_response_start_fields(self,event:HTTPResponseStartEvent,)-> Literal[True]:
+    def validate_rcp_response_start_fields(self,event:HTTPResponseStartEvent,headers: list)-> Literal[True]:
 
         """Check and validate rcp event fields"""
-        
+
         if not isinstance(event['status'],int): # Status code validation 
             raise exceptions.InvalidEventField(
                 field="status",
@@ -384,39 +403,55 @@ class HTTP3Stream:
         if not self.check_status(event['status']):
             raise exceptions.InvalidStatusCode(f"Invalid HTTP Status code: {event['status']}")
         
-        if event['headers'] is None:
+        
+        self.validate_headers(headers=headers)
+            
+        return True
+
+    def validate_headers(self,headers:Iterable) -> None:
+
+        if not isinstance(headers, Iterable):
             raise exceptions.InvalidEventField(
                 field="headers",
-                got=type(event['headers']),
+                got=type(headers),
                 expected=Iterable
             )
         
-        for header in event['headers']:
-
+        for header in headers:
+        
             if not isinstance(header, tuple) or len(header) != 2:
                 raise exceptions.InvalidEventField(
                     field="headers",
                     got=type(header),
                     expected=tuple,
                 )
-            
-            name, value = header
 
+            name, value = header
+        
             if not isinstance(name, bytes):
                 raise exceptions.InvalidEventField(
                     field="header name",
                     got=type(name),
                     expected=bytes,
                 )
-            
+
             if not isinstance(value, bytes):
                 raise exceptions.InvalidEventField(
                     field="header value",
                     got=type(value),
                     expected=bytes,
                 )
-            
-        return True
+
+            if name.startswith(b":"):
+                raise RuntimeError(
+                    f"RCP Violation - Pseudo-header '{name.decode('ascii', errors='replace')}' "
+                    "supplied in regular headers by Application."
+                )
+
+            if name.lower != name:
+                raise RuntimeError(
+                    f"RCP Violation - Header name must be lowercase: {name!r}"
+                )
 
     def get_client_addr(self, scope: HTTPScope) -> str:
         client = scope.get("client")

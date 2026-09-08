@@ -214,11 +214,7 @@ class RivenH3(QuicConnectionProtocol):
             connection=connection,
             stream_id=event.stream_id,
             scope=http_scope,
-            method=method,
-            scheme=scheme,
-            http_version=HTTPVersions.HTTP3,
             protocol=self,
-            path=path,
             max_queue_size=self._manager.config.max_queue_size
         )
 
