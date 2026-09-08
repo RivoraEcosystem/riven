@@ -296,12 +296,12 @@ class HTTP3Stream:
             
             status_code = event["status"]
             self.trailers_enabled = bool(event.get("trailers", False))
-            headers = list(event.get("headers",[]))
+            headers = event.get("headers",[])
 
 
-            self.validate_rcp_response_start_fields(event=event,headers=headers)
+            self.validate_rcp_response_start_fields(event=event)
 
-            headers = self.construct_pseudo_headers(status_code) + headers # construct pseduo headers for HTTP3 response and add at start of list
+            headers = self.construct_pseudo_headers(status_code) + self.build_validate_headers(headers=headers) # construct pseduo headers for HTTP3 response and add at start of list
             
             self._protocol._http.send_headers(stream_id=self.stream_id,headers=headers,end_stream=False)
 
@@ -358,10 +358,10 @@ class HTTP3Stream:
                     "RCP Violation - Response body not completed before trailers"
             )
 
-            headers = list(event.get('headers',[]))
+            headers = event.get('headers',[])
             more_trailers:bool = bool(event.get('more_trailers',False))
 
-            self.validate_headers(headers=headers)
+            headers = self.build_validate_headers(headers=headers)
 
             self._protocol._http.send_headers(stream_id=self.stream_id,headers=headers,end_stream= not more_trailers)
             self._protocol.transmit()
@@ -389,7 +389,7 @@ class HTTP3Stream:
     def check_status(self, code: int) -> bool: # check if status code is in range of valid HTTP codes 100 to 599
         return 100 <= code <= 599
 
-    def validate_rcp_response_start_fields(self,event:HTTPResponseStartEvent,headers: list)-> Literal[True]:
+    def validate_rcp_response_start_fields(self,event:HTTPResponseStartEvent) -> None:
 
         """Check and validate rcp event fields"""
 
@@ -403,12 +403,11 @@ class HTTP3Stream:
         if not self.check_status(event['status']):
             raise exceptions.InvalidStatusCode(f"Invalid HTTP Status code: {event['status']}")
         
-        
-        self.validate_headers(headers=headers)
             
-        return True
+        return
 
-    def validate_headers(self,headers:Iterable) -> None:
+    def build_validate_headers(self,headers:Iterable) -> list[tuple[bytes,bytes]]:
+        validated_headers = []
 
         if not isinstance(headers, Iterable):
             raise exceptions.InvalidEventField(
@@ -448,10 +447,14 @@ class HTTP3Stream:
                     "supplied in regular headers by Application."
                 )
 
-            if name.lower != name:
+            if name != name.lower():
                 raise RuntimeError(
                     f"RCP Violation - Header name must be lowercase: {name!r}"
                 )
+
+            validated_headers.append((name,value))
+
+        return validated_headers
 
     def get_client_addr(self, scope: HTTPScope) -> str:
         client = scope.get("client")
