@@ -5,7 +5,8 @@ from aioquic.quic.events import (
     HandshakeCompleted,
     ConnectionTerminated,
     StreamReset,
-    StopSendingReceived
+    StopSendingReceived,
+    QuicEvent
 )
 from aioquic.h3.events import (
     HeadersReceived,
@@ -83,6 +84,7 @@ class RivenH3(QuicConnectionProtocol):
         elif isinstance(event,DataReceived):
             await self._handle_data_received(event)
 
+
     async def _create_stream(
             self,
             event: HeadersReceived,
@@ -90,138 +92,182 @@ class RivenH3(QuicConnectionProtocol):
             extensions:dict[str, dict[object, object]] | None = None
             ) -> None:
         """Parse pseudo headers of H3 Events and create HTTPScope , StreamContext and call application reject on max_header_size"""
-        if not isinstance(event,HeadersReceived):
-            raise exceptions.InvalidEvent(event)
+        try:
+            if not isinstance(event,HeadersReceived):
+                raise exceptions.InvalidEvent(event)
 
-        header_size = self.header_list_size(event.headers)
+            header_size = self.header_list_size(event.headers)
 
-        if (self._manager.config.max_header_size > 0 # rejecting if headers exceed limit
-            and header_size > self._manager.config.max_header_size
-        ):
+            if (self._manager.config.max_header_size > 0 # rejecting if headers exceed limit
+                and header_size > self._manager.config.max_header_size
+            ):
+                if not self._disconnected:
+                    self._http.send_headers(
+                        stream_id=event.stream_id,
+                        headers=[
+                            (b":status", b"431"),
+                            (b"content-length", b"0"),
+                        ],
+                        end_stream=True,
+                    )
+
+                    self.transmit()
+                return
+
+            method = None
+            scheme = None
+            raw_target = None
+            headers = []
+            authority = None
+            normal_header = False
+
+
+            # Iterate instead of using dict() to preserve duplicate HTTP headers
+            # while validating pseudo-headers individually.
+            for name, value in event.headers:
+
+                if name.startswith(b":"):
+                    if normal_header:
+                        raise exceptions.MalformedRequest("Request Malformed - Pseudo headers after normal headers")
+
+                    if name == b":method":
+                        if method is not None:
+                            raise exceptions.DuplicatePseudoHeader(":method")
+                        try:
+                            method = RequestMethod(value.decode("ascii")) # accept only Uppercase Methods 
+                            # Reject CONNECT method
+                            if method == RequestMethod.CONNECT:
+                                raise exceptions.UnsupportedMethod("CONNECT")
+    
+                        except ValueError:
+                            raise exceptions.MethodNotAllowed(value.decode("ascii"))
+    
+                    elif name == b":scheme":
+                        if scheme is not None:
+                            raise exceptions.DuplicatePseudoHeader(":scheme")
+                        try:
+                            scheme = HTTPScheme(value.decode("ascii").lower())
+                        except ValueError:
+                            raise exceptions.InvalidScheme(value.decode("ascii"))
+    
+                    elif name == b":authority":
+                        if authority is not None:
+                            raise exceptions.DuplicatePseudoHeader(":authority")
+                        try:
+                            authority = value.decode("ascii")
+                        except UnicodeDecodeError:
+                            raise exceptions.InvalidAuthority(value)
+    
+                    elif name == b":path":
+                        if raw_target is not None:
+                            raise exceptions.DuplicatePseudoHeader(":path")
+                        raw_target = value
+
+                    else:
+                        raise exceptions.InvalidPseudoHeader(name.decode("ascii", "replace"))
+                    
+                else:
+                    headers.append((name, value))
+                    normal_header = True # normal headers started cant accept pseudo headers now
+
+            if method is None:
+                raise exceptions.MethodNotAllowed()
+
+            if scheme is None:
+                raise exceptions.InvalidScheme()
+
+            if authority is None:
+                raise exceptions.InvalidAuthority()
+
+            if raw_target is None:
+                raise exceptions.InvalidPath()
+            
+            if raw_target == b"*":
+                if method != RequestMethod.OPTIONS:
+                    raise exceptions.InvalidPath(raw_target)
+            elif not raw_target.startswith(b"/"):
+                raise exceptions.InvalidPath(raw_target)
+
+            raw_path, _, query_string = raw_target.partition(b"?") # convert raw target to raw path and query string with '?'
+
+            try:
+                path = raw_path.decode("utf-8")
+            except UnicodeDecodeError:
+                raise exceptions.InvalidPath(raw_path)
+
+            client = self._transport.get_extra_info("peername") # client info from _transport 
+            server = self._transport.get_extra_info("sockname") # server info from _transport
+
+            http_scope: HTTPScope = {
+                "type": ScopeType.HTTP,
+                "rcp": {"version": RCPVersions.VERSION_1},
+                "http_version": HTTPVersions.HTTP3,
+                "method": method,
+                "scheme": scheme,
+                "authority": authority,
+                "path": path,
+                "raw_path": raw_path,
+                "query_string": query_string,
+                "root_path": self._manager.config.root_path,
+                "headers": headers,
+                "client": client,
+                "server": server,
+            }
+            if state is not None:
+                http_scope['state'] = state
+
+            if extensions is not None:  
+                http_scope['extensions'] = extensions
+
+            connection = ConnectionInfo(
+                stream_id=event.stream_id,
+                server=server,
+                client=client,
+            )
+
+            stream_context = HTTP3Stream( # build http stream context
+                connection=connection,
+                stream_id=event.stream_id,
+                scope=http_scope,
+                protocol=self,
+                max_queue_size=self._manager.config.max_queue_size
+            )
+
+            if self._disconnected:
+                return
+            
+            self._active_streams[event.stream_id] = stream_context
+            stream_context.task = asyncio.get_event_loop().create_task(stream_context.run_rcp(self._manager._application)) # create task and store in stream_context
+
+        except (
+            exceptions.InvalidPath,
+            exceptions.InvalidAuthority,
+            exceptions.InvalidScheme,
+            exceptions.MethodNotAllowed,
+            exceptions.DuplicatePseudoHeader,
+            exceptions.InvalidPseudoHeader,
+            exceptions.MalformedRequest
+            ):
+            self._http._quic.reset_stream(stream_id=event.stream_id,error_code=ErrorCode.H3_MESSAGE_ERROR) # reset stream on request malformed errors
+            self.transmit()
+            raise
+        except exceptions.InvalidEvent:
+            self._http._quic.reset_stream(stream_id=event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
+            self.transmit()
+            raise
+        except exceptions.UnsupportedMethod:
             self._http.send_headers(
                 stream_id=event.stream_id,
                 headers=[
-                    (b":status", b"431"),
-                    (b"content-length", b"0"),
+                    (b":status", b"405"),
+                    (b"allow", b"GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE"), # Standard requirement for a 405 response
+                    (b"content-length", b"0")
                 ],
-                end_stream=True,
+                end_stream=True # Smooth termination of response
             )
-
             self.transmit()
-            return
+            raise
 
-        method = None
-        scheme = None
-        raw_target = None
-        headers = []
-        authority = None
-
-        # Iterate instead of using dict() to preserve duplicate HTTP headers
-        # while validating pseudo-headers individually.
-        for name, value in event.headers:
-
-            if name == b":method":
-                if method is not None:
-                    raise exceptions.DuplicatePseudoHeader(":method")
-                try:
-                    method = RequestMethod(value.decode("ascii"))
-                    # Reject CONNECT method
-                    if method == RequestMethod.CONNECT:
-                        raise exceptions.MethodNotAllowed("CONNECT")
-
-                except ValueError:
-                    raise exceptions.MethodNotAllowed(value.decode("ascii"))
-                
-            elif name == b":scheme":
-                if scheme is not None:
-                    raise exceptions.DuplicatePseudoHeader(":scheme")
-                try:
-                    scheme = HTTPScheme(value.decode("ascii"))
-                except ValueError:
-                    raise exceptions.InvalidScheme(value.decode("ascii"))
-                
-            elif name == b":authority":
-                if authority is not None:
-                    raise exceptions.DuplicatePseudoHeader(":authority")
-                try:
-                    authority = value.decode("ascii")
-                except UnicodeDecodeError:
-                    raise exceptions.InvalidAuthority(value)
-                
-            elif name == b":path":
-                if raw_target is not None:
-                    raise exceptions.DuplicatePseudoHeader(":path")
-                if value != b"*" and not value.startswith(b"/"): # Reject invalid path values except / and *
-                    raise exceptions.InvalidPath(value)
-                raw_target = value
-
-            elif name.startswith(b":"):
-                raise exceptions.InvalidPseudoHeader(name.decode("ascii", "replace"))
-            
-            else:
-                headers.append((name, value))
-
-        if method is None:
-            raise exceptions.MethodNotAllowed(None)
-
-        if scheme is None:
-            raise exceptions.InvalidScheme()
-
-        if authority is None:
-            raise exceptions.InvalidAuthority()
-
-        if raw_target is None:
-            raise exceptions.InvalidPath()
-
-        raw_path, _, query_string = raw_target.partition(b"?") # convert raw target to raw path and query string with '?'
-
-        try:
-            path = raw_path.decode("utf-8")
-        except UnicodeDecodeError:
-            raise exceptions.InvalidPath(raw_path)
-        
-        client = self._transport.get_extra_info("peername") # client info from _transport 
-        server = self._transport.get_extra_info("sockname") # server info from _transport
-
-        http_scope: HTTPScope = {
-            "type": ScopeType.HTTP,
-            "rcp": {"version": RCPVersions.VERSION_1},
-            "http_version": HTTPVersions.HTTP3,
-            "method": method,
-            "scheme": scheme,
-            "authority": authority,
-            "path": path,
-            "raw_path": raw_path,
-            "query_string": query_string,
-            "root_path": self._manager.config.root_path,
-            "headers": headers,
-            "client": client,
-            "server": server,
-        }
-        if state is not None:
-            http_scope['state'] = state
-
-        if extensions is not None:  
-            http_scope['extensions'] = extensions
-
-        connection = ConnectionInfo(
-            stream_id=event.stream_id,
-            server=server,
-            client=client,
-        )
-
-        stream_context = HTTP3Stream( # build http stream context
-            connection=connection,
-            stream_id=event.stream_id,
-            scope=http_scope,
-            protocol=self,
-            max_queue_size=self._manager.config.max_queue_size
-        )
-
-        self._active_streams[event.stream_id] = stream_context
-
-        stream_context.task = asyncio.get_event_loop().create_task(stream_context.run_rcp(self._manager._application)) # create task and store in stream_context
-        
         
 
     async def _handle_data_received(
@@ -247,10 +293,13 @@ class RivenH3(QuicConnectionProtocol):
         if not isinstance(context,HTTP3Stream):
             raise exceptions.InvalidStream(context,HTTP3Stream)
 
-        await context._push_to_queue(request_body)
+        if context._closed:
+            return
 
         if event.stream_ended:
             context._request_complete = True
+
+        await context._push_to_queue(request_body)
 
     async def _schedule_disconnect(
         self,
@@ -261,7 +310,7 @@ class RivenH3(QuicConnectionProtocol):
             raise exceptions.InvalidEvent(event)
         self._disconnected = True
 
-        active = [c for c in self._active_streams.values() if not c.is_closed]
+        active = [c for c in self._active_streams.values() if not c._closed]
 
         results = await asyncio.gather(
             *(self._close_stream(c) for c in active),

@@ -222,15 +222,15 @@ class HTTP3Stream:
     
         else:
             if result is not None:
-                msg = f"RCP callable should return None, but returned {result}."
+                msg = f"RCP Application should return None, but returned {result}."
                 protocol_logger.error(msg)
                 await self.reset_stream()
             elif not self._response_started and not self._closed:
-                msg = "RCP callable returned without starting response."
+                msg = "RCP Application returned without starting response."
                 protocol_logger.error(msg)
                 await self.send_500_response()
             elif not self._response_complete and not self._closed:
-                msg = "RCP callable returned without completing response."
+                msg = "RCP Application returned without completing response."
                 protocol_logger.error(msg)
                 await self.reset_stream()
     

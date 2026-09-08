@@ -152,3 +152,16 @@ class InvalidStatusCode(RivenException):
 
     def __init__(self, *args):
         super().__init__(*args)
+
+class ClientDisconnected(RivenException):
+    pass
+
+class MalformedRequest(RivenException):
+    pass
+
+class UnsupportedMethod(RivenException):
+    "Valid HTTP method not supported by Riven"
+    def __init__(
+            self,
+            method:str):
+        super().__init__(f"Unsupported HTTP Method {method}")
