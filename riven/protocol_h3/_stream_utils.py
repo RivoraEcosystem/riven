@@ -45,6 +45,7 @@ class HTTP3Stream:
     _RESPONSE_COMPLETE = 1 << 4
     _STREAM_RESET = 1 << 5
     _TRAILERS_ENABLED = 1 << 6
+    _INFORMATIONAL_SENT = 1 << 7
 
     __slots__ = (
         "connection",
@@ -139,6 +140,14 @@ class HTTP3Stream:
     @trailers_enabled.setter
     def trailers_enabled(self,value:bool) -> None:
         self._set_flag(self._TRAILERS_ENABLED, value)
+
+    @property
+    def _informational_sent(self) -> bool:
+        return self._get_flag(self._INFORMATIONAL_SENT)
+
+    @_informational_sent.setter
+    def _informational_sent(self, value: bool) -> None:
+        self._set_flag(self._INFORMATIONAL_SENT, value)
 
     def _get_flag(self,mask:int) -> bool:
             return bool(self._flags & mask)
@@ -291,25 +300,32 @@ class HTTP3Stream:
 
             event:HTTPResponseStartEvent = event
 
-            if self._response_started:
-                raise RuntimeError(f"RCP Violation - Headers already sent")
-            
-            status_code = event["status"]
-            self.trailers_enabled = bool(event.get("trailers", False))
-            headers = event.get("headers",[])
-
-
             self.validate_rcp_response_start_fields(event=event)
-
-            headers = self.construct_pseudo_headers(status_code) + self.build_validate_headers(headers=headers) # construct pseduo headers for HTTP3 response and add at start of list
+            status_code = event["status"]
             
-            self._protocol._http.send_headers(stream_id=self.stream_id,headers=headers,end_stream=False)
+            is_informational = (100 <= status_code <= 199)
 
-            self._response_status_code = status_code
-            self._response_started = True
+            if is_informational:
+                if self._response_started:
+                    raise RuntimeError("RCP Violation - Cannot send informational headers after the final response has started.")
+            else:
+                if self._response_started:
+                    raise RuntimeError("RCP Violation - Headers already sent")
+
+            self.trailers_enabled = bool(event.get("trailers", False))
+            headers = event.get("headers", [])
+
+            headers = self.construct_pseudo_headers(status_code) + self.build_validate_headers(headers=headers)
+
+            self._protocol._http.send_headers(stream_id=self.stream_id, headers=headers, end_stream=False)
+
+            if is_informational:
+                self._informational_sent = True
+            else:
+                self._response_status_code = status_code
+                self._response_started = True
 
             self._protocol.transmit()
-
             return
 
 
