@@ -52,6 +52,14 @@ if TYPE_CHECKING:
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
 
+FORBIDDEN_H3_HEADERS = {
+    b"connection",
+    b"keep-alive",
+    b"proxy-connection",
+    b"transfer-encoding",
+    b"upgrade"
+}
+
 class RivenH3(QuicConnectionProtocol):
     def __init__(self ,manager:Riven ,*args ,**kwargs):
         super().__init__(*args, **kwargs)
@@ -126,13 +134,16 @@ class RivenH3(QuicConnectionProtocol):
             # while validating pseudo-headers individually.
             for name, value in event.headers:
 
+                if name != name.lower():
+                    raise exceptions.H3MalformedMessage(f"Header name must be lowercase: {name!r}")
+
                 if name.startswith(b":"):
-                    if normal_header:
-                        raise exceptions.MalformedRequest("Request Malformed - Pseudo headers after normal headers")
+                    if normal_header: # Check RFC 9114 4.1.2 https://datatracker.ietf.org/doc/html/rfc9114#section-4.1.2
+                        raise exceptions.H3MalformedMessage("Request Malformed - Pseudo headers after normal headers")
 
                     if name == b":method":
                         if method is not None:
-                            raise exceptions.DuplicatePseudoHeader(":method")
+                            raise exceptions.H3MalformedMessage("Duplicate pseudo header :method")
                         try:
                             method = RequestMethod(value.decode("ascii")) # accept only Uppercase Methods 
                             # Reject CONNECT method
@@ -144,7 +155,7 @@ class RivenH3(QuicConnectionProtocol):
     
                     elif name == b":scheme":
                         if scheme is not None:
-                            raise exceptions.DuplicatePseudoHeader(":scheme")
+                            raise exceptions.H3MalformedMessage("Duplicate pseudo header :scheme")
                         try:
                             scheme = HTTPScheme(value.decode("ascii").lower())
                         except ValueError:
@@ -152,7 +163,7 @@ class RivenH3(QuicConnectionProtocol):
     
                     elif name == b":authority":
                         if authority is not None:
-                            raise exceptions.DuplicatePseudoHeader(":authority")
+                            raise exceptions.H3MalformedMessage("Duplicate pseudo header :authority")
                         try:
                             authority = value.decode("ascii")
                         except UnicodeDecodeError:
@@ -160,38 +171,47 @@ class RivenH3(QuicConnectionProtocol):
     
                     elif name == b":path":
                         if raw_target is not None:
-                            raise exceptions.DuplicatePseudoHeader(":path")
+                            raise exceptions.H3MalformedMessage("Duplicate pseudo header :path")
                         raw_target = value
 
                     else:
                         raise exceptions.InvalidPseudoHeader(name.decode("ascii", "replace"))
                     
                 else:
+
+                    if name == b"te" and not value == b"trailers":
+                        raise exceptions.H3MalformedMessage(f"Invalid value for header: 'te'")
+
+                    if name in FORBIDDEN_H3_HEADERS:
+                        raise exceptions.H3MalformedMessage(f"Forbidden headers in request: {name!r}")
+                    
                     headers.append((name, value))
                     normal_header = True # normal headers started cant accept pseudo headers now
 
             if method is None:
                 raise exceptions.MethodNotAllowed()
-
             if scheme is None:
                 raise exceptions.InvalidScheme()
-
             if authority is None:
                 raise exceptions.InvalidAuthority()
-
             if raw_target is None:
                 raise exceptions.InvalidPath()
             
-            if raw_target == b"*":
+            # Target validation
+            is_asterisk_form = (raw_target == b"*")
+            
+            if is_asterisk_form:
                 if method != RequestMethod.OPTIONS:
                     raise exceptions.InvalidPath(raw_target)
-            elif not raw_target.startswith(b"/"):
+            elif not (raw_target.startswith(b"/") or raw_target.startswith(b"http://") or raw_target.startswith(b"https://")):
                 raise exceptions.InvalidPath(raw_target)
 
-            raw_path, _, query_string = raw_target.partition(b"?") # convert raw target to raw path and query string with '?'
+            # Split path and query string
+            raw_path, _, query_string = raw_target.partition(b"?")
 
             try:
-                path = raw_path.decode("utf-8")
+                # convert to empty string if its a astrik 
+                path = "" if is_asterisk_form else raw_path.decode("utf-8")
             except UnicodeDecodeError:
                 raise exceptions.InvalidPath(raw_path)
 
@@ -246,7 +266,8 @@ class RivenH3(QuicConnectionProtocol):
             exceptions.MethodNotAllowed,
             exceptions.DuplicatePseudoHeader,
             exceptions.InvalidPseudoHeader,
-            exceptions.MalformedRequest
+            exceptions.MalformedRequest,
+            exceptions.H3MalformedMessage
             ) as err:
             self._http._quic.reset_stream(stream_id=event.stream_id,error_code=ErrorCode.H3_MESSAGE_ERROR) # reset stream on request malformed errors
             self.transmit()

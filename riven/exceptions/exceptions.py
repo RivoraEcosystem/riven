@@ -165,3 +165,9 @@ class UnsupportedMethod(RivenException):
             self,
             method:str):
         super().__init__(f"Unsupported HTTP Method {method}")
+
+class H3MalformedMessage(RivenException):
+    """Raised when Request Message contains Invalid headers according to HTTP3 schematic"""
+    
+class H3MalformedResponseMessage(RivenException):
+    """Raised when Response Message contains Invalid headers according to HTTP3 schematic"""

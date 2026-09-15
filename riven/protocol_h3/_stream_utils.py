@@ -36,6 +36,14 @@ from typing import Literal
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
 
+FORBIDDEN_H3_HEADERS = {
+    b"connection",
+    b"keep-alive",
+    b"proxy-connection",
+    b"transfer-encoding",
+    b"upgrade"
+}
+
 class HTTP3Stream:
 
     _CLOSED = 1 << 0
@@ -466,6 +474,14 @@ class HTTP3Stream:
             if name != name.lower():
                 raise RuntimeError(
                     f"RCP Violation - Header name must be lowercase: {name!r}"
+                )
+
+            # STRICT IETF RFC 9114 ENFORCEMENT FOR HTTP3 HEADERS
+            if name in FORBIDDEN_H3_HEADERS:
+
+                raise RuntimeError(
+                    f"IETF HTTP/3 Protocol Violation - Application attempted to send "
+                    f"forbidden connection-specific header field: '{name.decode('ascii', errors='replace')}'"
                 )
 
             validated_headers.append((name,value))
