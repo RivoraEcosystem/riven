@@ -67,12 +67,6 @@ Riven is actively being developed and is **not ready for production use yet**.
 
 The project is being built in public as part of the Rivora Ecosystem, with development logs, architecture decisions, experiments, and releases shared along the way.
 
-## Updates
-
-Development updates for Riven and the other Rivora Ecosystem projects are shared on:
-
-→ [r/RivoraEcosystem](https://www.reddit.com/r/RivoraEcosystem/)
-
 ## Contributions
 
 Riven is currently in active development, so contribution opportunities may change as the architecture evolves.
