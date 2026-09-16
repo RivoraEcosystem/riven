@@ -60,12 +60,11 @@ class HTTP3Stream:
         "stream_id",
         "scope",
         "_protocol",
-        "_queue",
         "_flags",
-        "_push_status",
-        "_push_event",
         "task",
         "_response_status_code",
+        "_body",
+        "more_body"
     )
 
     def __init__(
@@ -74,24 +73,22 @@ class HTTP3Stream:
         stream_id:int,
         scope:HTTPScope,
         protocol:RivenH3,
-        max_queue_size:int|None=0
         ) -> None:
         self.connection = connection
         self.stream_id = stream_id
-        
         self.scope = scope
         self._protocol = protocol
-        self._queue:asyncio.Queue[RCPReceiveEvent] = asyncio.Queue(maxsize=max_queue_size)
-    
+
         self._flags:int = 0
-    
-        self._push_status = asyncio.Event() # event for push
-        self._push_status.set()
-        self._push_event:RCPReceiveEvent|None = None
-    
+
         self.task: asyncio.Task | None = None
-    
+
         self._response_status_code:int|None = None
+
+        self._body:bytearray = bytearray()
+        self.more_body:bool = True
+    
+        
 
     @property
     def _closed(self) -> bool:
@@ -166,56 +163,28 @@ class HTTP3Stream:
         else:
             self._flags &= ~mask
 
-    async def _push_to_queue(self, data:RCPReceiveEvent) -> None:
-        "Add data to queue buffer"
-
-        await self._queue.put(data)
-
-    async def _pop_from_queue(self) -> RCPReceiveEvent | None:
-        "Read from request queue buffer to free up queue"
-        
-        item = await self._queue.get()
-    
-        return item
-
     async def receive(self) -> RCPReceiveEvent | None:
         "Receive function for RCPApplication which forward a event from request queue"
 
-        if self._push_event is not None:
-            return await self.get_push()
+        if self._closed or self._protocol._disconnected:
+            disconnect_event:HTTPDisconnectEvent = {"type":HTTPConnectionEventType.DISCONNECT}
+            return disconnect_event
 
-        return await self._pop_from_queue()
+        request_body:HTTPRequestEvent = {
+            "type" : HTTPConnectionEventType.REQUEST,
+            "body" : bytes(self._body),
+            "more_body" : self.more_body
+        }
 
-    async def push_event(self,event:RCPReceiveEvent) -> None:
-        if event is None or self._closed:
-            return  
+        self._body = bytearray()
 
-        if self._push_event is not None:
-            await self._push_status.wait() # wait for existing event 
-
-        self._push_event = event
-
-        self._push_status.clear() # reset event to make futher setters wait
-
-    async def get_push(self) -> RCPReceiveEvent:
-        if self._push_event is None:
-            raise RuntimeError("No Push event")
-
-        event = self._push_event
-        self._push_event = None
-
-        self._push_status.set()
-        return event
-
-
-    async def close(self):
-        if self._closed:
-            return
+        return request_body
+    
+    def close(self):
 
         self._closed = True
-        self._push_status.set()
-        self._push_event = None
-        self._queue.shutdown(immediate=True) # shutdown queue immediately
+        self.more_body = False
+        self._body = bytearray()
 
     # RCP Exception Wrapper
     async def run_rcp(self,app:RCPApplication) -> None:
@@ -268,8 +237,8 @@ class HTTP3Stream:
 
     async def handle_close(self):
         """Close StreamContext and remove from active stream"""
-        await self.close()
-        self._protocol._active_streams.pop(self.stream_id, None)   
+        self.close()
+        self._protocol._active_streams.pop(self.stream_id, None) # remove stream instance from memory 
 
     async def send_500_response(self) -> None: # send 500 Internal Server Error response to client
         error_response_start:HTTPResponseStartEvent={
