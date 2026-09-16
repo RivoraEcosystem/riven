@@ -114,7 +114,7 @@ class RivenH3(QuicConnectionProtocol):
         state:dict[str,Any] | None = None,
         extensions:dict[str, dict[object, object]] | None = None
         ) -> None:
-        """Parse pseudo headers of H3 Events and create HTTPScope , StreamContext and call application reject on max_header_size"""
+        """Parse pseudo headers of H3 Events and create HTTPScope , Stream and Call the application for valid requests, but reject requests that exceed the configured maximum header size"""
         try:
             if not isinstance(event,HeadersReceived):
                 raise exceptions.InvalidEvent(event)
@@ -320,7 +320,7 @@ class RivenH3(QuicConnectionProtocol):
         self,
         event:ConnectionTerminated 
     ):
-        """Handle an HTTP/3 connection termination by scheduling cleanup for all active streams."""
+        """Handle an HTTP/3 connection termination for all active streams."""
         try:
             if not isinstance(event,ConnectionTerminated):
                 raise exceptions.InvalidEvent(event)
