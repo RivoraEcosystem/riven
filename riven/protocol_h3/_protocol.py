@@ -76,29 +76,44 @@ class RivenH3(QuicConnectionProtocol):
                 self._http = H3Connection(self._quic) # Upgrade to HTTP3
 
         elif isinstance(event,ConnectionTerminated):
-            asyncio.create_task(self._schedule_disconnect(event))
+            self._schedule_disconnect(event)
 
         elif isinstance(event,StreamReset) or isinstance(event,StopSendingReceived):
-            asyncio.create_task(self._handle_stream_interrupt(event))
+            self._handle_stream_interrupt(event)
 
         if self._http:
             for http_event in self._http.handle_event(event):
-                asyncio.create_task(self._handle_h3_event(http_event))
+                if isinstance(http_event,HeadersReceived):
+                    self._create_stream(event=http_event,state=self._manager.state,extensions=self._manager.extensions)
+                elif isinstance(http_event,DataReceived):
+                    stream = self._active_streams.get(http_event.stream_id)
+
+                    if not isinstance(stream,HTTP3Stream):
+                        self._http._quic.reset_stream(stream_id=http_event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
+                        self.transmit()
+                        protocol_logger.error("Failed to handle HTTP/3 DataReceived event for stream %d - Invalid Stream",http_event.stream_id)
+                        return
+
+                    if stream._closed:
+                        self._http._quic.reset_stream(stream_id=http_event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
+                        self.transmit()
+                        stream._stream_reset = True
+                        protocol_logger.error("Failed to handle HTTP/3 DataReceived event for stream %d - Stream Closed By Application",http_event.stream_id)
+                        return
+
+                    if http_event.stream_ended:
+                        stream.more_body = False
+                        stream._request_complete = True
+
+                    stream._body = http_event.data
 
 
-    async def _handle_h3_event(self,event:H3Event):
-        if isinstance(event,HeadersReceived):
-            await self._create_stream(event=event,state=self._manager.state,extensions=self._manager.extensions)
-        elif isinstance(event,DataReceived):
-            await self._handle_data_received(event)
-
-
-    async def _create_stream(
-            self,
-            event: HeadersReceived,
-            state:dict[str,Any] | None = None,
-            extensions:dict[str, dict[object, object]] | None = None
-            ) -> None:
+    def _create_stream(
+        self,
+        event: HeadersReceived,
+        state:dict[str,Any] | None = None,
+        extensions:dict[str, dict[object, object]] | None = None
+        ) -> None:
         """Parse pseudo headers of H3 Events and create HTTPScope , StreamContext and call application reject on max_header_size"""
         try:
             if not isinstance(event,HeadersReceived):
@@ -128,6 +143,7 @@ class RivenH3(QuicConnectionProtocol):
             headers = []
             authority = None
             normal_header = False
+            host = None
 
 
             # Iterate instead of using dict() to preserve duplicate HTTP headers
@@ -179,23 +195,33 @@ class RivenH3(QuicConnectionProtocol):
                     
                 else:
 
-                    if name == b"te" and not value == b"trailers":
+                    if name == b"te" and not value.lower() == b"trailers":
                         raise exceptions.H3MalformedMessage(f"Invalid value for header: 'te'")
 
                     if name in FORBIDDEN_H3_HEADERS:
                         raise exceptions.H3MalformedMessage(f"Forbidden headers in request: {name!r}")
+
+                    if name == b"host": # store host header
+                        host = value
                     
                     headers.append((name, value))
                     normal_header = True # normal headers started cant accept pseudo headers now
 
             if method is None:
                 raise exceptions.MethodNotAllowed()
-            if scheme is None:
-                raise exceptions.InvalidScheme()
-            if authority is None:
-                raise exceptions.InvalidAuthority()
+            
+            if scheme in (HTTPScheme.HTTP, HTTPScheme.HTTPS):
+                if authority is None or authority == b"":
+                    raise exceptions.InvalidAuthority()
+                
             if raw_target is None:
                 raise exceptions.InvalidPath()
+
+            if authority is not None and host is not None: # reject authority and host header if both exists but their value dont match check - https://datatracker.ietf.org/doc/html/rfc9114#section-4.3.1-4 
+                if authority.encode("ascii") != host:
+                    raise exceptions.H3MalformedMessage(
+                        ":authority and Host do not match"
+                    )
             
             # Target validation
             is_asterisk_form = (raw_target == b"*")
@@ -250,7 +276,6 @@ class RivenH3(QuicConnectionProtocol):
                 stream_id=event.stream_id,
                 scope=http_scope,
                 protocol=self,
-                max_queue_size=self._manager.config.max_queue_size
             )
 
             if self._disconnected:
@@ -291,47 +316,7 @@ class RivenH3(QuicConnectionProtocol):
             self.transmit()
             protocol_logger.error("Unsupported HTTP/3 request received on stream %d",event.stream_id,exc_info=err)
 
-
-        
-
-    async def _handle_data_received(
-        self,
-        event: DataReceived
-    ):
-        """Parse DataReceived and generate HTTPRequestEvent and add to request queue for that stream and handle end streams to mark request end"""
-        try:
-            if not isinstance(event,DataReceived):
-                raise exceptions.InvalidEvent(event)
-
-            request_body:HTTPRequestEvent = {
-                "type" : HTTPConnectionEventType.REQUEST,
-                "body" : event.data,
-                "more_body" : not event.stream_ended
-            }
-
-            context = self._active_streams.get(event.stream_id)
-
-            if context is None:
-                # Stream already closed/reset or unknown stream
-                return
-
-            if not isinstance(context,HTTP3Stream):
-                raise exceptions.InvalidStream(context,HTTP3Stream)
-
-            if context._closed:
-                return
-
-            if event.stream_ended:
-                context._request_complete = True
-
-            await context._push_to_queue(request_body)
-        except (
-            exceptions.InvalidEvent,
-            exceptions.InvalidStream
-        ) as err:
-            protocol_logger.error("Failed to handle HTTP/3 DataReceived event for stream %d",event.stream_id,exc_info=err)
-
-    async def _schedule_disconnect(
+    def _schedule_disconnect(
         self,
         event:ConnectionTerminated 
     ):
@@ -341,33 +326,21 @@ class RivenH3(QuicConnectionProtocol):
                 raise exceptions.InvalidEvent(event)
             self._disconnected = True
 
-            active = [c for c in self._active_streams.values() if not c._closed]
+            for stream in self._active_streams.values():
+                try:
+                    if not isinstance(stream,HTTP3Stream):
+                        continue
 
-            results = await asyncio.gather(
-                *(self._close_stream(c) for c in active),
-                return_exceptions=True,
-            )
-
-            for context, result in zip(active, results):
-
-                if isinstance(result,Exception):
-                    protocol_logger.error("Exception while closing stream %d after connection termination",context.stream_id,exc_info=result)
-
+                    stream.close()
+                except Exception as e:
+                    protocol_logger.error("Exception while closing stream %d after connection termination",stream.stream_id,exc_info=e)
+                    continue
 
             self._manager._active_connections.pop(self._quic.host_cid,None) # remove connection manager
         except exceptions.InvalidEvent as err:
             protocol_logger.error("Failed to handle connection termination",exc_info=err)
 
-    async def _close_stream(
-        self,
-        context:HTTP3Stream
-    ):
-        """Gracefully close an HTTP stream after a client disconnect."""
-        disconnect_event:HTTPDisconnectEvent = {"type":HTTPConnectionEventType.DISCONNECT}
-
-        await context.push_event(disconnect_event)
-
-    async def _handle_stream_interrupt(self,event: StopSendingReceived | StreamReset):
+    def _handle_stream_interrupt(self,event: StopSendingReceived | StreamReset):
         try:
             if not isinstance(event, (StreamReset, StopSendingReceived)):
                 raise exceptions.InvalidEvent(event)
@@ -381,7 +354,9 @@ class RivenH3(QuicConnectionProtocol):
             if not isinstance(context,HTTP3Stream):
                 raise exceptions.InvalidStream(context,HTTP3Stream)
 
-            await self._close_stream(context=context) # close stream by sending HTTPDisconnectEvent using _close_stream
+            context.close()
+            context._stream_reset = True
+            
         except (exceptions.InvalidEvent, exceptions.InvalidStream) as err:
             protocol_logger.error("Failed to handle HTTP/3 stream interrupt for stream %d",event.stream_id,exc_info=err)
 
