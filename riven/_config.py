@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from .logger import LOGGING_CONFIG
 from typing import Any , Literal , get_args
-from rcp import RCPApplication
+from rcp import RCPApplication , H3_FORBIDDEN_HEADERS
 import os
 import logging.config
 import logging
@@ -15,6 +15,11 @@ LOG_LEVELS: dict[str, int] = {
     "warning": logging.WARNING,
     "info": logging.INFO,
     "debug": logging.DEBUG,
+}
+
+APPLICATION_INTERFACE_SPEC = {
+    'asgi' : {"version": "3.0", "spec_version": "2.4"},
+    'rcp' : {"version": "1.0"}
 }
 
 APPLICATION_INTERFACE = Literal['rcp','asgi']
@@ -34,7 +39,7 @@ class RivenConfig:
         self,
         app:RCPApplication | str,
         host:str = "127.0.0.1",
-        port:str = 8000,
+        port:int = 8000,
         max_header_size_kb:int = 0,
         root_path:str = "",
         log_config:Any = LOGGING_CONFIG,
@@ -46,12 +51,13 @@ class RivenConfig:
         access_log: bool = True,
         use_colors:bool = True,
         log_level:str|int|None = None,
-        application_interface:APPLICATION_INTERFACE|str = 'rcp'
+        application_interface:APPLICATION_INTERFACE|str = 'rcp',
+        app_factory:bool = False
 
     ):
-        self.app = app,
-        self.host = host,
-        self.port = port,
+        self.app = app
+        self.host = host
+        self.port = port
         self.max_header_size_kb = max_header_size_kb
         self.root_path = root_path
         self.log_config = log_config
@@ -65,16 +71,23 @@ class RivenConfig:
         self.use_colors = use_colors
         self.application_interface = application_interface
         self.log_level = log_level
+        self.app_factory = app_factory
         self.loaded = False
+        
         self.configure_logger()
 
     def configure_headers(self):
+        self.encoded_headers = [] # reset existing headers if any
         encoded_headers = [(key.lower().encode("latin1"), value.encode("latin1")) for key, value in self.headers]
-        self.encoded_headers = (
-            [(b"server", b"riven")] + encoded_headers
-            if b"server" not in encoded_headers and self.server_header
-            else encoded_headers
-        )
+        has_server = any(name == b"server" for name,_ in encoded_headers)
+        if self.server_header and not has_server:
+            self.encoded_headers = [(b'server',b'riven')] + encoded_headers # add server header and concat the list
+
+        for header in list(encoded_headers):
+            if header[0] in H3_FORBIDDEN_HEADERS: # omit forbidden headers
+                continue
+
+            self.encoded_headers.append((header[0],header[1]))
 
     def configure_logger(self) -> None:
         if self.log_config is not None:
@@ -98,7 +111,9 @@ class RivenConfig:
 
         if self.log_level is not None:
             if isinstance(self.log_level,str):
-                log_level = LOG_LEVELS[self.log_level.lower()]
+                log_level = LOG_LEVELS.get(self.log_level.lower())
+                if log_level is None:
+                    raise ValueError("Invalid LOG LEVEL %s" %   self.log_level)
             else:
                 log_level = self.log_level
 
@@ -112,7 +127,7 @@ class RivenConfig:
             logging.getLogger("riven.access").propagate = False
 
 
-    def import_app(self) -> None:
+    def import_app(self) -> Any:
         "Import APP using string and return it"
         try:
             return import_with_string(self.app)
@@ -124,15 +139,34 @@ class RivenConfig:
         if self.loaded:
             raise RuntimeError("Riven config already loaded")
 
-        if not (self.ssl_keyfile is None or self.ssl_certfile):
-            raise RuntimeError("SSL keyfile/certfile Missing")
+        if (not 1 <= self.port <= 65535):
+            raise RuntimeError("Invalid value for port %d" % self.port)
+
+        if (self.ssl_keyfile is None) != (self.ssl_certfile is None):
+            raise RuntimeError("SSL keyfile and certfile must be provided together")
 
         self.configure_headers()
 
         if isinstance(self.application_interface,str):
-            if not self.application_interface in get_args(APPLICATION_INTERFACE):
+            if not self.application_interface.lower() in get_args(APPLICATION_INTERFACE):
                 raise RuntimeError("Invalid Application Interface %s" % self.application_interface)
 
+            self.application_interface = self.application_interface.lower()
+
+        self.loaded_application = self.import_app()
+
+        try: # try calling application
+            self.loaded_application = self.loaded_application()
+        except TypeError as exc: # type error raised application is not loading through factory
+            if self.app_factory:
+                logger.error("Error Loading %s app factory: %s" % (self.application_interface.upper(),exc))
+                sys.exit(STARTUP_SHUTDOWN_FAILURE)
+        else:
+            if not self.app_factory: # factory detected but app factory settings not turned on
+                logger.error("App Factory Detected please turn on app factory settings")
+                sys.exit(STARTUP_SHUTDOWN_FAILURE)
+
+        self.loaded = True
 
 class ImporterError(Exception):
     pass
