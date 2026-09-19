@@ -16,7 +16,8 @@ from rcp import (
     HTTPResponseTrailersEvent,
     RCPApplication,
     RCPReceiveEvent,
-    RCPSendEvent
+    RCPSendEvent,
+    H3_FORBIDDEN_HEADERS
 )
 
 import asyncio
@@ -35,14 +36,6 @@ from typing import Literal
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
-
-FORBIDDEN_H3_HEADERS = {
-    b"connection",
-    b"keep-alive",
-    b"proxy-connection",
-    b"transfer-encoding",
-    b"upgrade"
-}
 
 class HTTP3Stream:
 
@@ -289,10 +282,11 @@ class HTTP3Stream:
                 if self._response_started:
                     raise RuntimeError("RCP Violation - Headers already sent")
 
-            self.trailers_enabled = bool(event.get("trailers", False))
+            if not is_informational: # informational response cannot have trailing headers
+                self.trailers_enabled = bool(event.get("trailers", False))
             headers = event.get("headers", [])
 
-            headers = self.construct_pseudo_headers(status_code) + self.build_validate_headers(headers=headers)
+            headers = self.construct_pseudo_headers(status_code) + self.build_validate_headers(headers=headers) + self._protocol.config.encoded_headers
 
             self._protocol._http.send_headers(stream_id=self.stream_id, headers=headers, end_stream=False)
 
@@ -446,7 +440,7 @@ class HTTP3Stream:
                 )
 
             # STRICT IETF RFC 9114 ENFORCEMENT FOR HTTP3 HEADERS
-            if name in FORBIDDEN_H3_HEADERS:
+            if name in H3_FORBIDDEN_HEADERS:
 
                 raise RuntimeError(
                     f"IETF HTTP/3 Protocol Violation - Application attempted to send "
