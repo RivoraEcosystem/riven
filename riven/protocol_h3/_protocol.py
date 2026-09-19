@@ -34,7 +34,8 @@ from rcp import (
     HTTPResponseBodyEvent,
     HTTPResponseTrailersEvent,
     HTTPDisconnectEvent,
-    RCPApplication
+    RCPApplication,
+    H3_FORBIDDEN_HEADERS
 )
 from ._stream_utils import HTTP3Stream , ConnectionInfo
 import asyncio
@@ -44,30 +45,27 @@ from rcp.events import Headers
 from collections.abc import Iterable
 import logging
 from typing import Literal , TYPE_CHECKING
+from _config import APPLICATION_INTERFACE_SPEC , RivenConfig
 
-if TYPE_CHECKING:
-    from ..server import Riven
 
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
 
-FORBIDDEN_H3_HEADERS = {
-    b"connection",
-    b"keep-alive",
-    b"proxy-connection",
-    b"transfer-encoding",
-    b"upgrade"
-}
-
 class RivenH3(QuicConnectionProtocol):
-    def __init__(self ,manager:Riven ,*args ,**kwargs):
+    def __init__(
+            self,
+            config:RivenConfig,
+            app_state: dict[str, Any],
+            *args,
+            **kwargs
+        ):
         super().__init__(*args, **kwargs)
         self.connection_id = self._quic.host_cid
-        self._manager = manager
+        self.config:RivenConfig = config
+        self.app_state = app_state
         self._active_streams:dict[int,HTTP3Stream] = dict()
         self._http = None
-        self._manager.add_connection(self)
         self._disconnected = False
 
     def quic_event_received(self, event):
@@ -121,8 +119,8 @@ class RivenH3(QuicConnectionProtocol):
 
             header_size = self.header_list_size(event.headers)
 
-            if (self._manager.config.max_header_size > 0 # rejecting if headers exceed limit
-                and header_size > self._manager.config.max_header_size
+            if (self.config.max_header_size > 0 # rejecting if headers exceed limit
+                and header_size > self.config.max_header_size
             ):
                 if not self._disconnected:
                     self._http.send_headers(
@@ -198,7 +196,7 @@ class RivenH3(QuicConnectionProtocol):
                     if name == b"te" and not value.lower() == b"trailers":
                         raise exceptions.H3MalformedMessage(f"Invalid value for header: 'te'")
 
-                    if name in FORBIDDEN_H3_HEADERS:
+                    if name in H3_FORBIDDEN_HEADERS:
                         raise exceptions.H3MalformedMessage(f"Forbidden headers in request: {name!r}")
 
                     if name == b"host": # store host header
@@ -222,6 +220,9 @@ class RivenH3(QuicConnectionProtocol):
                     raise exceptions.H3MalformedMessage(
                         ":authority and Host do not match"
                     )
+
+            if self.config.application_interface == "asgi" and not host:
+                headers.append((b"host",bytes(authority))) # add host header if application_interface is set to ASGI
             
             # Target validation
             is_asterisk_form = (raw_target == b"*")
@@ -246,7 +247,6 @@ class RivenH3(QuicConnectionProtocol):
 
             http_scope: HTTPScope = {
                 "type": ScopeType.HTTP,
-                "rcp": {"version": RCPVersions.VERSION_1},
                 "http_version": HTTPVersions.HTTP3,
                 "method": method,
                 "scheme": scheme,
@@ -254,16 +254,20 @@ class RivenH3(QuicConnectionProtocol):
                 "path": path,
                 "raw_path": raw_path,
                 "query_string": query_string,
-                "root_path": self._manager.config.root_path,
+                "root_path": self.config.root_path,
                 "headers": headers,
                 "client": client,
                 "server": server,
+                "state" : self.app_state.copy()
             }
-            if state is not None:
-                http_scope['state'] = state
 
             if extensions is not None:  
                 http_scope['extensions'] = extensions
+
+            if self.config.application_interface == "asgi":
+                http_scope['asgi'] = APPLICATION_INTERFACE_SPEC['asgi']
+            else:
+                http_scope['rcp'] = APPLICATION_INTERFACE_SPEC['rcp'] 
 
             connection = ConnectionInfo(
                 stream_id=event.stream_id,
