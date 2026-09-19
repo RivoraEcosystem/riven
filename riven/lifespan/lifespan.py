@@ -27,6 +27,7 @@ from ..exceptions.exceptions import(
     InvalidEvent
 )
 import logging
+from _config import RivenConfig , APPLICATION_INTERFACE_SPEC
 
 if TYPE_CHECKING:
     from ..server import Riven
@@ -42,13 +43,18 @@ class LifespanState(Enum):
 type LifespanSendEvent = LifespanStartupCompleteEvent|LifespanStartupFailedEvent|LifespanShutdownCompleteEvent|LifespanShutdownFailedEvent
 
 
-class LifeSpan:
+class LifeSpanOn:
 
     def __init__(
         self,
-        manager: Riven,
+        config: RivenConfig,
     ) -> None:
-        self.manager = manager
+
+        if not config.loaded:
+            config.load()
+        
+        self.config = config
+
 
         self.queue: asyncio.Queue[RCPReceiveEvent] = asyncio.Queue()
         self.task: asyncio.Task[None] | None = None
@@ -58,6 +64,8 @@ class LifeSpan:
 
         self.startup_event = asyncio.Event()
         self.shutdown_event = asyncio.Event()
+        self.state:dict[str, Any] = {}
+
 
         self.should_exit = False
         self.error_occurred = False
@@ -93,6 +101,7 @@ class LifeSpan:
     async def startup(self) -> None:
         self._state = LifespanState.STARTING
         event: LifespanStartupEvent = {"type":LifespanEventType.STARTUP}
+        self.task = asyncio.get_event_loop().create_task(self.main())
         await self._push(event)   
         await self.startup_event.wait()
 
@@ -113,29 +122,21 @@ class LifeSpan:
     @property
     def closed(self) -> bool:
         return self._closed
-
-    @property
-    def state(self) -> LifespanState:
-        return self._state
-
     async def main(
-        self,
-        app:RCPApplication,
-        state: dict[str, Any]|None,
-        extensions: dict[str, dict[object, object]]|None
+        self
     ) -> None:
 
         try:
+            app = self.config.loaded_application
             scope: LifespanScope = {
                 "type": ScopeType.LIFESPAN,
-                "rcp": {"version": RCPVersions.VERSION_1},
+                'state':self.state
             }
 
-            if state is not None:
-                scope['state'] = state
-
-            if extensions is not None:
-                scope["extensions"] = extensions
+            if self.config.application_interface == "asgi":
+                scope['asgi'] = APPLICATION_INTERFACE_SPEC['asgi']
+            else:
+                scope['rcp'] = APPLICATION_INTERFACE_SPEC['rcp'] 
             
 
             await app(scope, self.receive, self.send)
@@ -214,3 +215,15 @@ class LifeSpan:
 
             case _:
                 raise InvalidEvent(event["type"])
+
+
+class LifeSpanOff:
+    def __init__(self, config: RivenConfig) -> None:
+        self.should_exit = False
+        self.state: dict[str, Any] = {}
+
+    async def startup(self) -> None:
+        pass
+
+    async def shutdown(self) -> None:
+        pass

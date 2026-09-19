@@ -60,6 +60,8 @@ class RivenH3(QuicConnectionProtocol):
             *args,
             **kwargs
         ):
+        if not config.loaded:
+            config.load()
         super().__init__(*args, **kwargs)
         self.connection_id = self._quic.host_cid
         self.config:RivenConfig = config
@@ -82,7 +84,7 @@ class RivenH3(QuicConnectionProtocol):
         if self._http:
             for http_event in self._http.handle_event(event):
                 if isinstance(http_event,HeadersReceived):
-                    self._create_stream(event=http_event,state=self._manager.state,extensions=self._manager.extensions)
+                    self._create_stream(event=http_event)
                 elif isinstance(http_event,DataReceived):
                     stream = self._active_streams.get(http_event.stream_id)
 
@@ -108,9 +110,7 @@ class RivenH3(QuicConnectionProtocol):
 
     def _create_stream(
         self,
-        event: HeadersReceived,
-        state:dict[str,Any] | None = None,
-        extensions:dict[str, dict[object, object]] | None = None
+        event: HeadersReceived
         ) -> None:
         """Parse pseudo headers of H3 Events and create HTTPScope , Stream and Call the application for valid requests, but reject requests that exceed the configured maximum header size"""
         try:
@@ -261,9 +261,6 @@ class RivenH3(QuicConnectionProtocol):
                 "state" : self.app_state.copy()
             }
 
-            if extensions is not None:  
-                http_scope['extensions'] = extensions
-
             if self.config.application_interface == "asgi":
                 http_scope['asgi'] = APPLICATION_INTERFACE_SPEC['asgi']
             else:
@@ -286,7 +283,8 @@ class RivenH3(QuicConnectionProtocol):
                 return
             
             self._active_streams[event.stream_id] = stream_context
-            stream_context.task = asyncio.get_event_loop().create_task(stream_context.run_rcp(self._manager._application)) # create task and store in stream_context
+            app = self.config.loaded_application
+            stream_context.task = asyncio.get_event_loop().create_task(stream_context.run_rcp(app=app)) # create task and store in stream_context
 
         except (
             exceptions.InvalidPath,

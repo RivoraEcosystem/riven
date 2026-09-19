@@ -1,6 +1,7 @@
-from .lifespan import LifeSpan , LifespanState
+from .lifespan import LifeSpanOn, LifeSpanOff, LifespanState
 
 __all__ = [
-    "LifeSpan",
+    "LifeSpanOn",
+    "LifeSpanOff",
     "LifespanState"
 ]

@@ -22,6 +22,12 @@ APPLICATION_INTERFACE_SPEC = {
     'rcp' : {"version": "1.0"}
 }
 
+LIFESPAN_CLASS = {
+    "on" : "riven.lifespan.lifespan:LifeSpanOn",
+    "off" : "riven.lifespan.lifespan:LifeSpanOff"
+}
+
+LIFESPAN = Literal["on", "off"]
 APPLICATION_INTERFACE = Literal['rcp','asgi']
 STARTUP_SHUTDOWN_FAILURE = 3
 
@@ -52,7 +58,8 @@ class RivenConfig:
         use_colors:bool = True,
         log_level:str|int|None = None,
         application_interface:APPLICATION_INTERFACE|str = 'rcp',
-        app_factory:bool = False
+        app_factory:bool = False,
+        lifespan:LIFESPAN = "on"
 
     ):
         self.app = app
@@ -72,6 +79,8 @@ class RivenConfig:
         self.application_interface = application_interface
         self.log_level = log_level
         self.app_factory = app_factory
+        self.lifespan = lifespan
+
         self.loaded = False
         
         self.configure_logger()
@@ -152,6 +161,8 @@ class RivenConfig:
                 raise RuntimeError("Invalid Application Interface %s" % self.application_interface)
 
             self.application_interface = self.application_interface.lower()
+
+        self.lifespan_class = import_with_string(LIFESPAN_CLASS[self.lifespan]) # get lifespan class
 
         self.loaded_application = self.import_app()
 
