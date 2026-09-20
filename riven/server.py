@@ -7,24 +7,11 @@ from aioquic.asyncio.server import serve , QuicServer
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.h3.connection import H3_ALPN
 from .exceptions.exceptions import (
-    RivenException,
-    InvalidEvent,
-    DuplicatePseudoHeader,
-    InvalidPseudoHeader,
-    MethodNotAllowed,
-    InvalidScheme,
-    InvalidAuthority,
-    InvalidPath,
-    InvalidStream,
-    InvalidLifespanState,
-    LifespanAlreadyCompleted,
-    LifespanNotStarted
+    RivenException
 )
-
 from .lifespan import (
     LifeSpanOn,
     LifeSpanOff,
-    LifespanState
 )
 from logger.colors import colorize , ANSIColor
 import os
@@ -33,12 +20,24 @@ from ._config import (
     RivenConfig,
     STARTUP_SHUTDOWN_FAILURE
     )
-from typing import Any ,TYPE_CHECKING
+from typing import Any ,TYPE_CHECKING , Generator
+from types import FrameType
 
+import signal
+import threading
 import sys
 import logging
+import contextlib
 
 type LifeSpan = LifeSpanOff|LifeSpanOn
+
+HANDLED_SIGNALS = (
+    signal.SIGINT, # UNIX 2 : CTRL + C
+    signal.SIGTERM  # UNIX 15 : `kill <pid>`
+)
+
+if sys.platform == "win32":
+    HANDLED_SIGNALS += (signal.SIGBREAK) # windows signal 21 : CTRL + Break
 
 logger = logging.getLogger('riven')
 
@@ -51,6 +50,9 @@ class RivenServer: # server connection manager
         self.started:bool = False
         self.should_exit:bool = False
         self.force_exit:bool = False
+        self._captured_signals = []
+        self.server:QuicServer|None = None
+        self.lifespan:LifeSpan|None = None
 
     async def startup(self):
         await self.lifespan.startup()
@@ -71,7 +73,7 @@ class RivenServer: # server connection manager
             password=config.ssl_keyfile_password
         )
 
-        self.server:QuicServer = await serve(
+        self.server = await serve(
             host=config.host,
             port=config.port,
             configuration=configuration,
@@ -93,10 +95,44 @@ class RivenServer: # server connection manager
         if not config.loaded:
             config.load()
 
-        self.lifespan:LifeSpan = config.lifespan_class(config)
+        self.lifespan = config.lifespan_class(config)
 
         startup_message = "Started server process [%d]"
         logger.info(startup_message,processID)
 
+
+    @contextlib.contextmanager
+    def intercept_signals(self) -> Generator[None,None,None]:
+
+        # Only Intercept on main thread
+        if threading.current_thread() is not threading.main_thread():
+            yield 
+            return
+
+        # apply custom hook for signals but store original
+        original_handlers = {
+            sig: signal.signal(sig,self.handle_exit)
+            for sig in HANDLED_SIGNALS
+        }
+        try:
+            yield
+        finally:
+            # revert to original handlers
+            for sig,handler in original_handlers.items():
+                signal.signal(sig,handler)
+
+        # Re-raise absorbed signals to parent process
+        for captured_signal in reversed(self._captured_signals):
+            signal.raise_signal(captured_signal)
+
+    def handle_exit(self,sig:int,frame:FrameType|None) -> None:
+        # store captured signal
+        self._captured_signals.append(sig)
     
-        
+        # double break (ctrl+c) activate force crash state
+        if self.should_exit and sig == signal.SIGINT:
+            self.force_exit = True
+            logger.warning("Force exit signal. Crashing immediately...")
+        else:
+            self.should_exit = True
+            logger.info("Exit signal captured. Initializing graceful wrap-up...")
