@@ -59,8 +59,8 @@ class RivenConfig:
         log_level:str|int|None = None,
         application_interface:APPLICATION_INTERFACE|str = 'rcp',
         app_factory:bool = False,
-        lifespan:LIFESPAN = "on"
-
+        lifespan:LIFESPAN = "on",
+        shutdown_timeout:int = 5,
     ):
         self.app = app
         self.host = host
@@ -69,7 +69,6 @@ class RivenConfig:
         self.root_path = root_path
         self.log_config = log_config
         self.headers = headers or []
-        self.encoded_headers: list[tuple[bytes, bytes]] = []
         self.server_header = server_header
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
@@ -80,7 +79,9 @@ class RivenConfig:
         self.log_level = log_level
         self.app_factory = app_factory
         self.lifespan = lifespan
+        self.shutdown_timeout = shutdown_timeout
 
+        self.encoded_headers: list[tuple[bytes, bytes]] = []
         self.loaded = False
         
         self.configure_logger()
@@ -122,7 +123,7 @@ class RivenConfig:
             if isinstance(self.log_level,str):
                 log_level = LOG_LEVELS.get(self.log_level.lower())
                 if log_level is None:
-                    raise ValueError("Invalid LOG LEVEL %s" %   self.log_level)
+                    raise ValueError("Invalid LOG LEVEL %s" % self.log_level)
             else:
                 log_level = self.log_level
 
@@ -162,7 +163,11 @@ class RivenConfig:
 
             self.application_interface = self.application_interface.lower()
 
-        self.lifespan_class = import_with_string(LIFESPAN_CLASS[self.lifespan]) # get lifespan class
+        try:
+            self.lifespan_class = import_with_string(LIFESPAN_CLASS[self.lifespan]) # get lifespan class
+        except ImporterError as e:
+            logger.error("Error Loading Lifespan class %s" % e)
+            sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
         self.loaded_application = self.import_app()
 
