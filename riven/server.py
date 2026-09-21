@@ -3,12 +3,15 @@ from .protocol_h3 import (
     ConnectionInfo,
     HTTP3Stream,
 )
+from .protocol_h3._protocol import send_goaway_and_disconnect
 from aioquic.asyncio.server import serve , QuicServer
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.h3.connection import H3_ALPN
 from .exceptions.exceptions import (
     RivenException
 )
+from aioquic.quic.events import ConnectionTerminated
+from aioquic.quic.packet import QuicErrorCode
 from .lifespan import (
     LifeSpanOn,
     LifeSpanOff,
@@ -49,7 +52,7 @@ class RivenState:
         self.connections: set[RivenH3] = set()
 
         # RCP/ASGI Application tasks
-        self.application_task = set[asyncio.Task[None]] = set()
+        self.application_task: set[asyncio.Task[None]] = set()
 
     @property
     def total_task(self) -> int:
@@ -58,10 +61,12 @@ class RivenState:
     def add_connection(self,connection:RivenH3) -> None:
         """Add connection to server state"""
         self.connections.add(connection)
+        self._total_connections+=1
     
     def remove_connection(self,connection:RivenH3) -> None:
         """Remove connection from server state"""
         self.connections.discard(connection)
+        self._total_connections -= 1
 
 class RivenServer: # riven server and lifecycle manager
     def __init__(
@@ -163,3 +168,42 @@ class RivenServer: # riven server and lifecycle manager
         else:
             self.should_exit = True
             logger.info("Exit signal captured. Initializing graceful wrap-up...")
+
+    async def shutdown(self) -> None:
+        logger.info("Shutting down")
+
+        # call protocol's own closing method using ConnectionTerminated event to schedule disconnect and change state for internal streams        
+        event = ConnectionTerminated(error_code=QuicErrorCode.NO_ERROR,reason_phrase="Server Shutting down")
+
+        for protocol in list(self.server_state.connections):
+            await protocol._schedule_disconnect(event=event) # send 
+            send_goaway_and_disconnect(protocol=protocol) # send GOAWAY frame and close connection transport layer
+        await asyncio.sleep(0.1)
+
+        try:
+            await asyncio.wait_for(
+                self._wait_for_tasks(),
+                timeout=self.config.shutdown_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Cancel %s running tasks, timeout of graceful shutdown exceeded",
+                self.server_state.total_task
+            )
+
+            for task in self.server_state.application_task:
+                task.cancel(msg="Task cancelled, timeout of graceful shutdown exceeded")
+
+        if not self.force_exit:
+            await self.lifespan.shutdown()
+        
+
+
+    async def _wait_for_tasks(self) -> None:
+
+        # wait for tasks to complete
+        if self.server_state.application_task and not self.force_exit:
+            logger.info("Waiting for background tasks to complete. (CTRL + C to force exit)")
+
+            while self.server_state.application_task and not self.force_exit:
+                await asyncio.sleep(0.1)
