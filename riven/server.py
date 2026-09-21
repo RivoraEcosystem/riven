@@ -55,7 +55,15 @@ class RivenState:
     def total_task(self) -> int:
         return len(self.application_task)
 
-class RivenServer: # server connection manager 
+    def add_connection(self,connection:RivenH3) -> None:
+        """Add connection to server state"""
+        self.connections.add(connection)
+    
+    def remove_connection(self,connection:RivenH3) -> None:
+        """Remove connection from server state"""
+        self.connections.discard(connection)
+
+class RivenServer: # riven server and lifecycle manager
     def __init__(
         self,
         config:RivenConfig,
@@ -71,14 +79,6 @@ class RivenServer: # server connection manager
 
         self.server:QuicServer|None = None
         self.lifespan:LifeSpan|None = None
-
-    def add_connection(self,connection:RivenH3) -> None:
-        """Add connection to server state"""
-        self.server_state.connections.add(connection)
-
-    def remove_connection(self,connection:RivenH3) -> None:
-        """Remove connection from server state"""
-        self.server_state.connections.discard(connection)
 
     async def startup(self):
         await self.lifespan.startup()
@@ -106,7 +106,7 @@ class RivenServer: # server connection manager
             create_protocol=lambda *args, **kwargs:
             RivenH3(
                 config=self.config,
-                app_state=self.lifespan.state,
+                app_state=self.lifespan.state.copy(),
                 server_state=self.server_state,
                 *args,
                 **kwargs

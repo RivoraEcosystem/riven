@@ -74,8 +74,6 @@ class HTTP3Stream:
 
         self._flags:int = 0
 
-        self.task: asyncio.Task | None = None
-
         self._response_status_code:int|None = None
 
         self._body:bytearray = bytearray()

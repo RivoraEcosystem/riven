@@ -2,16 +2,13 @@ from __future__ import annotations
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.events import (
     ProtocolNegotiated,
-    HandshakeCompleted,
     ConnectionTerminated,
     StreamReset,
     StopSendingReceived,
-    QuicEvent
 )
 from aioquic.h3.events import (
     HeadersReceived,
     DataReceived,
-    H3Event
 )
 from aioquic.h3.connection import (
     H3_ALPN,
@@ -22,31 +19,19 @@ from rcp import (
     HTTPScope,
     ScopeType,
     HTTPVersions,
-    HTTPSendEvents,
-    HTTPRequestEvent,
-    HTTPConnectionEventType,
-    HTTPDisconnectEvent,
-    RCPVersions,
     RequestMethod,
     HTTPScheme,
-    HTTPResponseEventType,
-    HTTPResponseStartEvent,
-    HTTPResponseBodyEvent,
-    HTTPResponseTrailersEvent,
-    HTTPDisconnectEvent,
-    RCPApplication,
     H3_FORBIDDEN_HEADERS
 )
 from ._stream_utils import HTTP3Stream , ConnectionInfo
 import asyncio
 from ..exceptions import exceptions
 from typing import Any
-from rcp.events import Headers
-from collections.abc import Iterable
 import logging
-from typing import Literal , TYPE_CHECKING
+from typing import TYPE_CHECKING
 from _config import APPLICATION_INTERFACE_SPEC , RivenConfig
-
+if TYPE_CHECKING:
+    from ..server import RivenState
 
 
 access_logger = logging.getLogger("riven.access")
@@ -57,6 +42,7 @@ class RivenH3(QuicConnectionProtocol):
             self,
             config:RivenConfig,
             app_state: dict[str, Any],
+            server_state:RivenState,
             *args,
             **kwargs
         ):
@@ -64,11 +50,13 @@ class RivenH3(QuicConnectionProtocol):
             config.load()
         super().__init__(*args, **kwargs)
         self.connection_id = self._quic.host_cid
-        self.config:RivenConfig = config
+        self.config= config
         self.app_state = app_state
+        self.server_state = server_state
         self._active_streams:dict[int,HTTP3Stream] = dict()
         self._http = None
         self._disconnected = False
+        self.server_state.add_connection(self) # add connection to server state
 
     def quic_event_received(self, event):
         if isinstance(event, ProtocolNegotiated):
@@ -284,7 +272,9 @@ class RivenH3(QuicConnectionProtocol):
             
             self._active_streams[event.stream_id] = stream_context
             app = self.config.loaded_application
-            stream_context.task = asyncio.get_event_loop().create_task(stream_context.run_rcp(app=app)) # create task and store in stream_context
+            application_task = asyncio.get_event_loop().create_task(stream_context.run_rcp(app=app)) # create task
+            self.server_state.application_task = application_task # store task in server state
+            application_task.add_done_callback(self.server_state.application_task.discard(application_task)) # remove task on done
 
         except (
             exceptions.InvalidPath,
@@ -338,7 +328,7 @@ class RivenH3(QuicConnectionProtocol):
                     protocol_logger.error("Exception while closing stream %d after connection termination",stream.stream_id,exc_info=e)
                     continue
 
-            self._manager._active_connections.pop(self._quic.host_cid,None) # remove connection manager
+            self.server_state.remove_connection(self) # remove connection from server state
         except exceptions.InvalidEvent as err:
             protocol_logger.error("Failed to handle connection termination",exc_info=err)
 
