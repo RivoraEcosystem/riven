@@ -13,8 +13,10 @@ from aioquic.h3.events import (
 from aioquic.h3.connection import (
     H3_ALPN,
     H3Connection,
-    ErrorCode
+    ErrorCode,
+    FrameType
 )
+from aioquic.buffer import Buffer
 from rcp import (
     HTTPScope,
     ScopeType,
@@ -58,6 +60,9 @@ class RivenH3(QuicConnectionProtocol):
         self._disconnected = False
         self.server_state.add_connection(self) # add connection to server state
 
+        # highest value of seen streamID
+        self.highest_seen_stream_id:int = 0
+
     def quic_event_received(self, event):
         if isinstance(event, ProtocolNegotiated):
             if event.alpn_protocol == H3_ALPN: # confirm HTTP3
@@ -72,6 +77,10 @@ class RivenH3(QuicConnectionProtocol):
         if self._http:
             for http_event in self._http.handle_event(event):
                 if isinstance(http_event,HeadersReceived):
+                    # event streamID value higher than stored value 
+                    if event.stream_id > self.highest_seen_stream_id:
+                        self.highest_seen_stream_id = event.stream_id
+
                     self._create_stream(event=http_event)
                 elif isinstance(http_event,DataReceived):
                     stream = self._active_streams.get(http_event.stream_id)
@@ -358,3 +367,41 @@ class RivenH3(QuicConnectionProtocol):
             len(name) + len(value) + 32
             for name, value in headers
         )
+
+def send_goaway_and_disconnect(
+        protocol:RivenH3,
+        error_code:int=ErrorCode.H3_NO_ERROR,
+        reason_phrase="Server Shutting down"
+    ):
+    """
+        Encodes the GOAWAY frame using aioquic's Buffer and immediately queues 
+        a CONNECTION_CLOSE so they are packed into the same UDP envelope.
+    """
+    quic_conn = protocol._quic
+
+    # USE H3_CONNECTION's internal local control stream id variable
+    control_stream_id = protocol._http._local_control_stream_id
+
+    # Encode HTTP/3 GOAWAY frame using aioquic's buffer class
+    buf = Buffer(capacity=32)
+    buf.push_uint_var(FrameType.GOAWAY) # Frame Type (0x07)
+
+    payload_buffer = Buffer(capacity=16)
+    payload_buffer.push_uint_var(protocol.highest_seen_stream_id)
+    payload_len = payload_buffer.tell()
+
+    buf.push_uint_var(payload_len)
+    buf.push_uint_var(protocol.highest_seen_stream_id)
+
+    # Retrieve bytes cleanly by reading the data property
+    # from index 0 up to where the pointer stopped (tell)
+    goaway_frame_bytes = buf.data[:buf.tell()]
+
+    # Queue GOAWAY frame
+    quic_conn.send_stream_data(control_stream_id,data=goaway_frame_bytes)
+
+    # Immediately queue connection level CONNECTION_CLOSE frame
+    quic_conn.close(error_code=error_code,reason_phrase=reason_phrase)    
+
+    # Flush both frames together instantly into same network envelope
+    protocol.transmit()
