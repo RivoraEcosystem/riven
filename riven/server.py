@@ -41,18 +41,44 @@ if sys.platform == "win32":
 
 logger = logging.getLogger('riven')
 
+
+class RivenState:
+    """Shared server state that is avaliable to all protocol instances"""
+    def __init__(self) -> None:
+        self._total_connections:int = 0
+        self.connections: set[RivenH3] = set()
+
+        # RCP/ASGI Application tasks
+        self.application_task = set[asyncio.Task[None]] = set()
+
+    @property
+    def total_task(self) -> int:
+        return len(self.application_task)
+
 class RivenServer: # server connection manager 
     def __init__(
         self,
         config:RivenConfig,
     ):
         self.config = config
+        self.server_state:RivenState = RivenState()
+
         self.started:bool = False
         self.should_exit:bool = False
         self.force_exit:bool = False
-        self._captured_signals = []
+
+        self._captured_signals:list[int] = []
+
         self.server:QuicServer|None = None
         self.lifespan:LifeSpan|None = None
+
+    def add_connection(self,connection:RivenH3) -> None:
+        """Add connection to server state"""
+        self.server_state.connections.add(connection)
+
+    def remove_connection(self,connection:RivenH3) -> None:
+        """Remove connection from server state"""
+        self.server_state.connections.discard(connection)
 
     async def startup(self):
         await self.lifespan.startup()
@@ -81,6 +107,7 @@ class RivenServer: # server connection manager
             RivenH3(
                 config=self.config,
                 app_state=self.lifespan.state,
+                server_state=self.server_state,
                 *args,
                 **kwargs
             )
