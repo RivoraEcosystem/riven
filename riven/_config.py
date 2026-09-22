@@ -19,7 +19,7 @@ LOG_LEVELS: dict[str, int] = {
     "debug": logging.DEBUG,
 }
 
-APPLICATION_INTERFACE_SPEC:dict[str, str] = {
+APPLICATION_INTERFACE_SPEC:dict[str, dict[str, str]] = {
     'asgi' : {"version": "3.0", "spec_version": "2.4"},
     'rcp' : {"version": "1.0"}
 }
