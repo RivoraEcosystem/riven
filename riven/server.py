@@ -48,7 +48,6 @@ logger = logging.getLogger('riven')
 class RivenState:
     """Shared server state that is avaliable to all protocol instances"""
     def __init__(self) -> None:
-        self._total_connections:int = 0
         self.connections: set[RivenH3] = set()
 
         # RCP/ASGI Application tasks
@@ -58,15 +57,17 @@ class RivenState:
     def total_task(self) -> int:
         return len(self.application_task)
 
+    @property
+    def total_active_connections(self) -> int:
+        return len(self.connections)
+
     def add_connection(self,connection:RivenH3) -> None:
         """Add connection to server state"""
         self.connections.add(connection)
-        self._total_connections+=1
     
     def remove_connection(self,connection:RivenH3) -> None:
         """Remove connection from server state"""
         self.connections.discard(connection)
-        self._total_connections -= 1
 
 class RivenServer: # riven server and lifecycle manager
     def __init__(
@@ -84,6 +85,30 @@ class RivenServer: # riven server and lifecycle manager
 
         self.server:QuicServer|None = None
         self.lifespan:LifeSpan|None = None
+    
+    async def serve(self) -> None:
+        with self.intercept_signals():
+            await self._serve()
+
+    async def _serve(self):
+        processID = os.getpid()
+        config = self.config
+
+        if not config.loaded:
+            config.load()
+
+        self.lifespan = config.lifespan_class(config)
+
+        startup_message = "Started server process [%d]"
+        logger.info(startup_message,processID)
+        await self.startup()
+        if not self.should_exit:
+            await self.main_loop()
+
+        if self.started:
+            await self.shutdown()
+            logger.info("Finished server process [%d]",processID)
+
 
     async def startup(self):
         await self.lifespan.startup()
@@ -119,19 +144,6 @@ class RivenServer: # riven server and lifecycle manager
         )
 
         self.started = True
-
-    async def _serve(self):
-        processID = os.getpid()
-        config = self.config
-
-        if not config.loaded:
-            config.load()
-
-        self.lifespan = config.lifespan_class(config)
-
-        startup_message = "Started server process [%d]"
-        logger.info(startup_message,processID)
-
 
     @contextlib.contextmanager
     def intercept_signals(self) -> Generator[None,None,None]:
@@ -196,8 +208,10 @@ class RivenServer: # riven server and lifecycle manager
 
         if not self.force_exit:
             await self.lifespan.shutdown()
-        
 
+    async def main_loop(self) -> None:
+        while not self.should_exit:
+            await asyncio.sleep(0.1)
 
     async def _wait_for_tasks(self) -> None:
 
