@@ -130,13 +130,13 @@ class RivenConfig:
                     logging.config.dictConfig(loaded_config)
 
             else: # Riven cannot process log config
-                raise RuntimeError("Failed to load Log config please provide valid config using JSON/DICT")
+                logger.error("Failed to load Log config please provide valid config using JSON/DICT")
 
         if self.log_level is not None:
             if isinstance(self.log_level,str):
                 log_level = LOG_LEVELS.get(self.log_level.lower())
                 if log_level is None:
-                    raise ValueError("Invalid LOG LEVEL %s" % self.log_level)
+                    logger.error("Invalid LOG LEVEL %s" % self.log_level)
             else:
                 log_level = self.log_level
 
@@ -173,19 +173,23 @@ class RivenConfig:
 
     def load(self) -> None:
         if self.loaded:
-            raise RuntimeError("Riven config already loaded")
+            logger.error("Riven config already loaded")
+            sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
         if (not 1 <= self.port <= 65535):
-            raise RuntimeError("Invalid value for port %d" % self.port)
+            logger.error("Invalid value for port %d" % self.port)
+            sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
-        if (self.ssl_keyfile is None) != (self.ssl_certfile is None):
-            raise RuntimeError("SSL keyfile and certfile must be provided together")
+        if (self.ssl_keyfile is None) or (self.ssl_certfile is None):
+            logger.error("SSL keyfile and certfile must be provided together")
+            sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
         self.configure_headers()
 
         if isinstance(self.application_interface,str):
             if not self.application_interface.lower() in get_args(APPLICATION_INTERFACE):
-                raise RuntimeError("Invalid Application Interface %s" % self.application_interface)
+                logger.error("Invalid Application Interface %s" % self.application_interface)
+                sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
             self.application_interface = self.application_interface.lower()
 
