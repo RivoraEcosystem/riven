@@ -85,6 +85,10 @@ class RivenServer: # riven server and lifecycle manager
 
         self.server:QuicServer|None = None
         self.lifespan:LifeSpan|None = None
+
+    def run(self) -> None:
+        "Start server using configured loop factory"
+        return asyncio.run(self.serve(),loop_factory=self.config.get_loop_factory())
     
     async def serve(self) -> None:
         with self.intercept_signals():
