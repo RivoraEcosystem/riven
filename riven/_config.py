@@ -8,6 +8,8 @@ import logging
 import json
 import importlib
 import sys
+import asyncio
+from collections.abc import Callable
 
 LOG_LEVELS: dict[str, int] = {
     "critical": logging.CRITICAL,
@@ -17,18 +19,27 @@ LOG_LEVELS: dict[str, int] = {
     "debug": logging.DEBUG,
 }
 
-APPLICATION_INTERFACE_SPEC = {
+APPLICATION_INTERFACE_SPEC:dict[str, str] = {
     'asgi' : {"version": "3.0", "spec_version": "2.4"},
     'rcp' : {"version": "1.0"}
 }
 
-LIFESPAN_CLASS = {
+LIFESPAN_CLASS:dict[str, str] = {
     "on" : "riven.lifespan.lifespan:LifeSpanOn",
     "off" : "riven.lifespan.lifespan:LifeSpanOff"
 }
 
+LOOP_FACTORIES: dict[str, str | None] = {
+    "none" : None,
+    "auto" : "riven.loop.auto:auto_loop_factory",
+    "asyncio" : "riven.loop.asyncio:asyncio_loop_factory",
+    "uvloop" : "riven.loop.uvloop:uvloop_loop_factory",
+    "winloop" : "riven.loop.winloop:winloop_loop_factory"
+} 
+
 LIFESPAN = Literal["on", "off"]
 APPLICATION_INTERFACE = Literal['rcp','asgi']
+LOOP_FACTORY_TYPE = Literal["none", "auto", "asyncio", "uvloop" , "winloop"]
 STARTUP_SHUTDOWN_FAILURE = 3
 
 logger = logging.getLogger("riven")
@@ -60,6 +71,7 @@ class RivenConfig:
         application_interface:APPLICATION_INTERFACE|str = 'rcp',
         app_factory:bool = False,
         lifespan:LIFESPAN = "on",
+        loop:LOOP_FACTORY_TYPE|str = "auto",
         shutdown_timeout:int = 5,
     ):
         self.app = app
@@ -79,6 +91,7 @@ class RivenConfig:
         self.log_level = log_level
         self.app_factory = app_factory
         self.lifespan = lifespan
+        self.loop = loop
         self.shutdown_timeout = shutdown_timeout
 
         self.encoded_headers: list[tuple[bytes, bytes]] = []
@@ -136,6 +149,19 @@ class RivenConfig:
             logging.getLogger("riven.access").handlers = []
             logging.getLogger("riven.access").propagate = False
 
+    def get_loop_factory(self) -> Callable[[], asyncio.AbstractEventLoop] | None:
+        if self.loop in LOOP_FACTORIES:
+            loop_factory: Callable[...,Any]|None = import_with_string(LOOP_FACTORIES[self.loop])
+        else:
+            try:
+                return import_with_string(self.loop)
+            except ImporterError as e:
+                logger.error("Error loading custom loop factory. %s" % e)
+                sys.exit(STARTUP_SHUTDOWN_FAILURE)
+        if loop_factory is None:
+            return None
+
+        return loop_factory()
 
     def import_app(self) -> Any:
         "Import APP using string and return it"
