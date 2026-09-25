@@ -27,10 +27,7 @@ from ..exceptions.exceptions import(
     InvalidEvent
 )
 import logging
-from _config import RivenConfig , APPLICATION_INTERFACE_SPEC
-
-if TYPE_CHECKING:
-    from ..server import Riven
+from .._config import RivenConfig , APPLICATION_INTERFACE_SPEC
 
 class LifespanState(Enum):
     INITIAL = auto()
