@@ -31,7 +31,7 @@ from ..exceptions import exceptions
 from typing import Any
 import logging
 from typing import TYPE_CHECKING
-from _config import APPLICATION_INTERFACE_SPEC , RivenConfig
+from .._config import APPLICATION_INTERFACE_SPEC , RivenConfig
 if TYPE_CHECKING:
     from ..server import RivenState
 
