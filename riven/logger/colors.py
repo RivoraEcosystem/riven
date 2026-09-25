@@ -43,6 +43,15 @@ class ANSIColor(StrEnum):
     BRIGHT_CYAN = "\033[96m"
     BRIGHT_WHITE = "\033[97m"
 
+    BRIGHT_BOLD_BLACK = "\033[1;90m"
+    BRIGHT_BOLD_RED = "\033[1;91m"
+    BRIGHT_BOLD_GREEN = "\033[1;92m"
+    BRIGHT_BOLD_YELLOW = "\033[1;93m"
+    BRIGHT_BOLD_BLUE = "\033[1;94m"
+    BRIGHT_BOLD_MAGENTA = "\033[1;95m"
+    BRIGHT_BOLD_CYAN = "\033[1;96m"
+    BRIGHT_BOLD_WHITE = "\033[1;97m"
+    
 
 _LEVEL_COLORS: dict[int, ANSIColor] = {
     logging.DEBUG: ANSIColor.BRIGHT_BLACK,

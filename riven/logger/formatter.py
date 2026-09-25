@@ -13,7 +13,8 @@ from .colors import (
     method_color,
     status_color,
     supports_color,
-    status_phrase
+    status_phrase,
+    ANSIColor
 )
 
 
@@ -40,13 +41,17 @@ class DefaultFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         recordcopy = copy(record)
 
-        level = f"{recordcopy.levelname:<9}"
-
+        level = recordcopy.levelname
+        separator = " " * (9 - len(level))
         recordcopy.__dict__["levelprefix"] = colorize(
             level,
             level_color(recordcopy.levelno),
             self.use_colors,
-        )
+        ) +":" + separator
+        if self.use_colors:
+            if "color_message" in recordcopy.__dict__:
+                recordcopy.msg = recordcopy.__dict__["color_message"]
+                recordcopy.__dict__["message"] = recordcopy.getMessage() # re format message with colour arguments
 
         return super().format(recordcopy)
 
@@ -65,25 +70,18 @@ class AccessFormatter(DefaultFormatter):
          http_version,
          status_code) = recordcopy.args
 
-        if method is not None:
-            method = colorize(
-                str(method),
-                method_color(str(method)),
-                self.use_colors,
-            )
-
         if status_code:
             status_code = (
                 f"{colorize(
                     str(status_code),
                     status_color(int(status_code)),
                     self.use_colors,
-                )} {status_phrase(int(status_code))}"
+                )} {colorize(status_phrase(int(status_code)),status_color(status_code),self.use_colors)}"
             )
         else:
             status_code = ""
 
-        request_line = f"{method} {full_path} HTTP/{http_version}"
+        request_line = colorize(f"{method} {full_path} HTTP/{http_version}",ANSIColor.BRIGHT_BOLD_WHITE,self.use_colors)
         recordcopy.__dict__.update(
             {
                 "client_addr" : client_addr,

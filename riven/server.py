@@ -101,14 +101,17 @@ class RivenServer: # riven server and lifecycle manager
         self.lifespan = config.lifespan_class(config)
 
         startup_message = "Started server process [%d]"
-        logger.info(startup_message,processID)
+        color_startup_message = "Started server process [" + colorize("%d",color=ANSIColor.CYAN,enabled=True) + "]"
+        logger.info(startup_message,processID, extra={"color_message": color_startup_message})
         await self.startup()
         if not self.should_exit:
             await self.main_loop()
 
         if self.started:
             await self.shutdown()
-            logger.info("Finished server process [%d]",processID)
+            shutdown_message = "Finished server process [%d]"
+            color_shutdown_message = "Finished server process [" + colorize("%d",color=ANSIColor.CYAN,enabled=True) + "]"
+            logger.info(shutdown_message,processID,extra={"color_message":color_shutdown_message})
 
 
     async def startup(self):
