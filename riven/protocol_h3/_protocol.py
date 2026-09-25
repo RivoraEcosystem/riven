@@ -65,7 +65,7 @@ class RivenH3(QuicConnectionProtocol):
 
     def quic_event_received(self, event):
         if isinstance(event, ProtocolNegotiated):
-            if event.alpn_protocol == H3_ALPN: # confirm HTTP3
+            if event.alpn_protocol == H3_ALPN[0]: # confirm HTTP3
                 self._http = H3Connection(self._quic) # Upgrade to HTTP3
 
         elif isinstance(event,ConnectionTerminated):
@@ -78,8 +78,8 @@ class RivenH3(QuicConnectionProtocol):
             for http_event in self._http.handle_event(event):
                 if isinstance(http_event,HeadersReceived):
                     # event streamID value higher than stored value 
-                    if event.stream_id > self.highest_seen_stream_id:
-                        self.highest_seen_stream_id = event.stream_id
+                    if http_event.stream_id > self.highest_seen_stream_id:
+                        self.highest_seen_stream_id = http_event.stream_id
 
                     self._create_stream(event=http_event)
                 elif isinstance(http_event,DataReceived):
@@ -102,7 +102,7 @@ class RivenH3(QuicConnectionProtocol):
                         stream.more_body = False
                         stream._request_complete = True
 
-                    stream._body = http_event.data
+                    stream._body += http_event.data # add event data to stream's body
 
 
     def _create_stream(
@@ -219,7 +219,7 @@ class RivenH3(QuicConnectionProtocol):
                     )
 
             if self.config.application_interface == "asgi" and not host:
-                headers.append((b"host",bytes(authority))) # add host header if application_interface is set to ASGI
+                headers.append((b"host",authority.encode("ascii"))) # add host header if application_interface is set to ASGI
             
             # Target validation
             is_asterisk_form = (raw_target == b"*")
@@ -239,7 +239,7 @@ class RivenH3(QuicConnectionProtocol):
             except UnicodeDecodeError:
                 raise exceptions.InvalidPath(raw_path)
 
-            client = self._transport.get_extra_info("peername") # client info from _transport 
+            client = self._quic._network_paths[0].addr # client info from network paths 
             server = self._transport.get_extra_info("sockname") # server info from _transport
 
             http_scope: HTTPScope = {
