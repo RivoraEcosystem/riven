@@ -48,11 +48,11 @@ class RivenState:
         self.connections: set[RivenH3] = set()
 
         # RCP/ASGI Application tasks
-        self.application_task: set[asyncio.Task[None]] = set()
+        self.application_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def total_task(self) -> int:
-        return len(self.application_task)
+        return len(self.application_tasks)
 
     @property
     def total_active_connections(self) -> int:
@@ -207,7 +207,7 @@ class RivenServer: # riven server and lifecycle manager
                 self.server_state.total_task
             )
 
-            for task in self.server_state.application_task:
+            for task in self.server_state.application_tasks:
                 task.cancel(msg="Task cancelled, timeout of graceful shutdown exceeded")
 
         if not self.force_exit:
@@ -220,8 +220,8 @@ class RivenServer: # riven server and lifecycle manager
     async def _wait_for_tasks(self) -> None:
 
         # wait for tasks to complete
-        if self.server_state.application_task and not self.force_exit:
+        if self.server_state.application_tasks and not self.force_exit:
             logger.info("Waiting for background tasks to complete. (CTRL + C to force exit)")
 
-            while self.server_state.application_task and not self.force_exit:
+            while self.server_state.application_tasks and not self.force_exit:
                 await asyncio.sleep(0.1)

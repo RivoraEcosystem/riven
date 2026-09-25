@@ -269,7 +269,7 @@ class RivenH3(QuicConnectionProtocol):
                 client=client,
             )
 
-            stream_context = HTTP3Stream( # build http stream context
+            stream = HTTP3Stream( # build http stream context
                 connection=connection,
                 stream_id=event.stream_id,
                 scope=http_scope,
@@ -279,11 +279,11 @@ class RivenH3(QuicConnectionProtocol):
             if self._disconnected:
                 return
             
-            self._active_streams[event.stream_id] = stream_context
+            self._active_streams[event.stream_id] = stream
             app = self.config.loaded_application
-            application_task = asyncio.get_event_loop().create_task(stream_context.run_rcp(app=app)) # create task
-            self.server_state.application_task = application_task # store task in server state
-            application_task.add_done_callback(self.server_state.application_task.discard(application_task)) # remove task on done
+            application_task = asyncio.get_event_loop().create_task(stream.run_rcp(app=app)) # create task
+            self.server_state.application_tasks.add(application_task) # store task in server state
+            application_task.add_done_callback(self.server_state.application_tasks.discard) # remove task on done
 
         except (
             exceptions.InvalidPath,
