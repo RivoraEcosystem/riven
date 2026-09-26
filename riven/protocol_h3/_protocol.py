@@ -9,12 +9,17 @@ from aioquic.quic.events import (
 from aioquic.h3.events import (
     HeadersReceived,
     DataReceived,
+    Headers
 )
+from aioquic.h3.events import Headers
 from aioquic.h3.connection import (
     H3_ALPN,
     H3Connection,
     ErrorCode,
-    FrameType
+    FrameType,
+    FrameUnexpected,
+    HeadersState,
+    encode_frame
 )
 from aioquic.buffer import Buffer
 from rcp import (
@@ -120,7 +125,7 @@ class RivenH3(QuicConnectionProtocol):
                 and header_size > self.config.max_header_size
             ):
                 if not self._disconnected:
-                    self._http.send_headers(
+                    self.send_headers(
                         stream_id=event.stream_id,
                         headers=[
                             (b":status", b"431"),
@@ -305,7 +310,7 @@ class RivenH3(QuicConnectionProtocol):
             protocol_logger.error("Malformed HTTP/3 request received on stream %d",event.stream_id,exc_info=err)
 
         except exceptions.UnsupportedMethod as err:
-            self._http.send_headers(
+            self.send_headers(
                 stream_id=event.stream_id,
                 headers=[
                     (b":status", b"405"),
@@ -367,6 +372,47 @@ class RivenH3(QuicConnectionProtocol):
             len(name) + len(value) + 32
             for name, value in headers
         )
+
+    def send_headers(
+        self, stream_id: int, headers: Headers, end_stream: bool = False , is_informational:bool = False
+    ) -> None:
+        if is_informational and end_stream:
+            raise ValueError("Informational headers (1xx) cannot end the stream.")
+
+        # check HEADERS frame is allowed
+        with self._http._get_or_create_stream(stream_id) as stream:
+            if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
+                raise FrameUnexpected("HEADERS frame is not allowed in this state")
+
+            # Cannot send informational headers after final headers were already sent
+            if (
+                is_informational
+                and stream.headers_send_state != HeadersState.INITIAL
+            ):
+                raise FrameUnexpected("Informational headers cannot be sent after final headers.")
+            
+            if end_stream:
+                stream.finish_sending()
+            frame_data = self._http._encode_headers(stream_id, headers)
+            # log frame
+            if self._http._quic_logger is not None:
+                self._http._quic_logger.log_event(
+                    category="http",
+                    event="frame_created",
+                    data=self._http._quic_logger.encode_http3_headers_frame(
+                        length=len(frame_data), headers=headers, stream_id=stream_id
+                    ),
+                )
+            # update state and send headers
+            if not is_informational:
+                if stream.headers_send_state == HeadersState.INITIAL:
+                    stream.headers_send_state = HeadersState.AFTER_HEADERS
+                else:
+                    stream.headers_send_state = HeadersState.AFTER_TRAILERS
+            self._http._quic.send_stream_data(
+                stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
+            )
+
 
 def send_goaway_and_disconnect(
         protocol:RivenH3,

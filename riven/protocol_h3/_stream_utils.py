@@ -286,7 +286,7 @@ class HTTP3Stream:
 
             headers = self.construct_pseudo_headers(status_code) + self.build_validate_headers(headers=headers) + self._protocol.config.encoded_headers
 
-            self._protocol._http.send_headers(stream_id=self.stream_id, headers=headers, end_stream=False)
+            self._protocol.send_headers(stream_id=self.stream_id, headers=headers, end_stream=False,is_informational=is_informational)
 
             if is_informational:
                 self._informational_sent = True
@@ -348,7 +348,7 @@ class HTTP3Stream:
 
             headers = self.build_validate_headers(headers=headers)
 
-            self._protocol._http.send_headers(stream_id=self.stream_id,headers=headers,end_stream= not more_trailers)
+            self._protocol.send_headers(stream_id=self.stream_id,headers=headers,end_stream= not more_trailers)
             self._protocol.transmit()
 
             self._response_complete = (not more_trailers)
