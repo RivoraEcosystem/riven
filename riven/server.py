@@ -37,7 +37,7 @@ HANDLED_SIGNALS = (
 )
 
 if sys.platform == "win32":
-    HANDLED_SIGNALS += (signal.SIGBREAK) # windows signal 21 : CTRL + Break
+    HANDLED_SIGNALS += (signal.SIGBREAK,) # windows signal 21 : CTRL + Break
 
 logger = logging.getLogger('riven')
 
@@ -139,9 +139,9 @@ class RivenServer: # riven server and lifecycle manager
             configuration=configuration,
             create_protocol=lambda *args, **kwargs:
             RivenH3(
-                config=self.config,
-                app_state=self.lifespan.state.copy(),
-                server_state=self.server_state,
+                self.config,
+                self.lifespan.state.copy(),
+                self.server_state,
                 *args,
                 **kwargs
             )
@@ -189,10 +189,10 @@ class RivenServer: # riven server and lifecycle manager
         logger.info("Shutting down")
 
         # call protocol's own closing method using ConnectionTerminated event to schedule disconnect and change state for internal streams        
-        event = ConnectionTerminated(error_code=QuicErrorCode.NO_ERROR,reason_phrase="Server Shutting down")
+        event = ConnectionTerminated(error_code=QuicErrorCode.NO_ERROR,reason_phrase="Server Shutting down",frame_type=None)
 
         for protocol in list(self.server_state.connections):
-            await protocol._schedule_disconnect(event=event) # send 
+            protocol._schedule_disconnect(event=event) # send 
             send_goaway_and_disconnect(protocol=protocol) # send GOAWAY frame and close connection transport layer
         await asyncio.sleep(0.1)
 
