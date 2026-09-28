@@ -9,12 +9,18 @@ from aioquic.quic.events import (
 from aioquic.h3.events import (
     HeadersReceived,
     DataReceived,
+    Headers
 )
 from aioquic.h3.connection import (
     H3_ALPN,
     H3Connection,
     ErrorCode,
-    FrameType
+    FrameType,
+    FrameUnexpected,
+    ProtocolError,
+    HeadersState,
+    MessageError,
+    encode_frame
 )
 from aioquic.buffer import Buffer
 from rcp import (
@@ -38,6 +44,44 @@ if TYPE_CHECKING:
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
+
+def send_goaway_and_disconnect(
+        protocol:RivenH3,
+        error_code:int=ErrorCode.H3_NO_ERROR,
+        reason_phrase="Server Shutting down"
+    ):
+    """
+        Encodes the GOAWAY frame using aioquic's Buffer and immediately queues 
+        a CONNECTION_CLOSE so they are packed into the same UDP envelope.
+    """
+    quic_conn = protocol._quic
+
+    # USE H3_CONNECTION's internal local control stream id variable
+    control_stream_id = protocol._http._local_control_stream_id
+
+    # Encode HTTP/3 GOAWAY frame using aioquic's buffer class
+    buf = Buffer(capacity=32)
+    buf.push_uint_var(FrameType.GOAWAY) # Frame Type (0x07)
+
+    payload_buffer = Buffer(capacity=16)
+    payload_buffer.push_uint_var(protocol.highest_seen_stream_id)
+    payload_len = payload_buffer.tell()
+
+    buf.push_uint_var(payload_len)
+    buf.push_uint_var(protocol.highest_seen_stream_id)
+
+    # Retrieve bytes cleanly by reading the data property
+    # from index 0 up to where the pointer stopped (tell)
+    goaway_frame_bytes = buf.data[:buf.tell()]
+
+    # Queue GOAWAY frame
+    quic_conn.send_stream_data(control_stream_id,data=goaway_frame_bytes)
+
+    # Immediately queue connection level CONNECTION_CLOSE frame
+    quic_conn.close(error_code=error_code,reason_phrase=reason_phrase)    
+
+    # Flush both frames together instantly into same network envelope
+    protocol.transmit()
 
 class RivenH3(QuicConnectionProtocol):
     def __init__(
@@ -66,7 +110,7 @@ class RivenH3(QuicConnectionProtocol):
     def quic_event_received(self, event):
         if isinstance(event, ProtocolNegotiated):
             if event.alpn_protocol == H3_ALPN[0]: # confirm HTTP3
-                self._http = H3Connection(self._quic) # Upgrade to HTTP3
+                self._http = H3Protocol(self._quic) # Upgrade to HTTP3
 
         elif isinstance(event,ConnectionTerminated):
             self._schedule_disconnect(event)
@@ -368,40 +412,75 @@ class RivenH3(QuicConnectionProtocol):
             for name, value in headers
         )
 
-def send_goaway_and_disconnect(
-        protocol:RivenH3,
-        error_code:int=ErrorCode.H3_NO_ERROR,
-        reason_phrase="Server Shutting down"
-    ):
+class H3Protocol(H3Connection):
     """
-        Encodes the GOAWAY frame using aioquic's Buffer and immediately queues 
-        a CONNECTION_CLOSE so they are packed into the same UDP envelope.
+    A High-level HTTP/3 wrapper for aioquic's H3Connection implementing own headers send state management.
     """
-    quic_conn = protocol._quic
 
-    # USE H3_CONNECTION's internal local control stream id variable
-    control_stream_id = protocol._http._local_control_stream_id
+    def __init__(self, quic, enable_webtransport = False):
+        super().__init__(quic, enable_webtransport)
 
-    # Encode HTTP/3 GOAWAY frame using aioquic's buffer class
-    buf = Buffer(capacity=32)
-    buf.push_uint_var(FrameType.GOAWAY) # Frame Type (0x07)
+    def send_headers(
+        self, stream_id: int, headers: Headers, end_stream: bool = False
+    ) -> None:
+        """
+        Send headers on the given stream.
+    
+        .. aioquic_transmit::
+    
+        :param stream_id: The stream ID on which to send the headers.
+        :param headers: The HTTP headers to send.
+        :param end_stream: Whether to end the stream.
+        """
+        informational_response_headers = self.is_informational_response(headers=headers)
 
-    payload_buffer = Buffer(capacity=16)
-    payload_buffer.push_uint_var(protocol.highest_seen_stream_id)
-    payload_len = payload_buffer.tell()
+        if informational_response_headers and end_stream:
+            raise ProtocolError("Informational headers (1xx) cannot end the stream.")
 
-    buf.push_uint_var(payload_len)
-    buf.push_uint_var(protocol.highest_seen_stream_id)
+        # check HEADERS frame is allowed
+        with self._get_or_create_stream(stream_id) as stream:
+            if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
+                raise FrameUnexpected("HEADERS frame is not allowed in this state")
 
-    # Retrieve bytes cleanly by reading the data property
-    # from index 0 up to where the pointer stopped (tell)
-    goaway_frame_bytes = buf.data[:buf.tell()]
+            # Cannot send informational headers after final headers were already sent
+            if (
+                informational_response_headers
+                and stream.headers_send_state != HeadersState.INITIAL
+            ):
+                raise FrameUnexpected("Informational headers cannot be sent after final headers.")
+            
+            if end_stream:
+                stream.finish_sending()
+            frame_data = self._encode_headers(stream_id, headers)
+            # log frame
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="http",
+                    event="frame_created",
+                    data=self._quic_logger.encode_http3_headers_frame(
+                        length=len(frame_data), headers=headers, stream_id=stream_id
+                    ),
+                )
+            # update state and send headers
+            if not informational_response_headers:
+                if stream.headers_send_state == HeadersState.INITIAL:
+                    stream.headers_send_state = HeadersState.AFTER_HEADERS
+                else:
+                    stream.headers_send_state = HeadersState.AFTER_TRAILERS
+            self._quic.send_stream_data(
+                stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
+            )
 
-    # Queue GOAWAY frame
-    quic_conn.send_stream_data(control_stream_id,data=goaway_frame_bytes)
-
-    # Immediately queue connection level CONNECTION_CLOSE frame
-    quic_conn.close(error_code=error_code,reason_phrase=reason_phrase)    
-
-    # Flush both frames together instantly into same network envelope
-    protocol.transmit()
+    def is_informational_response(self,headers:Headers) -> bool:
+        """
+        Check if `:status` contains Informational response status code (1xx)
+        """
+        for key , value in headers:
+            try:
+                if (key == b":status" and (100 <= int(value) <= 199)):# status code between 100-199 (1xx) and not 101 (switching protocol)
+                    if (value == b"101"):
+                        raise MessageError("Header :status contains forbidden 101 status code")
+                    return True
+            except ValueError as exc:
+                raise MessageError("Header %r contains invalid characters" % key) from exc
+        return False
