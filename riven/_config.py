@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from .logger import LOGGING_CONFIG
 from typing import Any , Literal , get_args
 from rcp import RCPApplication , H3_FORBIDDEN_HEADERS

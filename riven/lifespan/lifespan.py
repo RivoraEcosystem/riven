@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum, auto
-from typing import TYPE_CHECKING , Any
+from typing import Any
 
 from rcp import (
     LifespanScope,
     RCPReceiveEvent,
-    RCPSendEvent,
     LifespanEventType,
     LifespanStartupEvent,
     LifespanShutdownEvent,
-    RCPApplication,
     ScopeType,
-    RCPVersions,
     LifespanStartupCompleteEvent,
     LifespanStartupFailedEvent,
     LifespanShutdownCompleteEvent,
@@ -22,8 +19,6 @@ from rcp import (
 
 from ..exceptions.exceptions import(
     InvalidLifespanState,
-    LifespanAlreadyCompleted,
-    LifespanNotStarted,
     InvalidEvent
 )
 import logging
@@ -96,6 +91,7 @@ class LifeSpanOn:
             return None
 
     async def startup(self) -> None:
+        self.logger.info("Waiting for application startup.")
         self._state = LifespanState.STARTING
         event: LifespanStartupEvent = {"type":LifespanEventType.STARTUP}
         self.task = asyncio.get_event_loop().create_task(self.main())
@@ -105,8 +101,13 @@ class LifeSpanOn:
         if self.startup_failed or self.error_occurred:
             self.logger.error("Application startup failed. Exiting.")
             self.should_exit = True
+        else:
+            self.logger.info("Application startup complete.")
 
     async def shutdown(self) -> None:
+        if self.error_occurred:
+            return
+        self.logger.info("Waiting for application shutdown.")
         self._state = LifespanState.STOPPING
         event: LifespanShutdownEvent = {"type":LifespanEventType.SHUTDOWN} 
         await self._push(event)
@@ -115,6 +116,8 @@ class LifeSpanOn:
         if self.shutdown_failed or self.error_occurred:
             self.logger.error("Application shutdown failed. Exiting.")
             self.should_exit = True
+        else:
+            self.logger.info("Application shutdown complete.")
 
     @property
     def closed(self) -> bool:

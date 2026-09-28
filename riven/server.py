@@ -1,7 +1,5 @@
 from .protocol_h3 import (
     RivenH3,
-    ConnectionInfo,
-    HTTP3Stream,
 )
 from .protocol_h3._protocol import send_goaway_and_disconnect
 from aioquic.asyncio.server import serve , QuicServer
@@ -20,7 +18,7 @@ from ._config import (
     RivenConfig,
     STARTUP_SHUTDOWN_FAILURE
     )
-from typing import Any ,TYPE_CHECKING , Generator
+from typing import Generator
 from types import FrameType
 
 import signal
@@ -116,11 +114,10 @@ class RivenServer: # riven server and lifecycle manager
 
     async def startup(self):
         await self.lifespan.startup()
-
-        config = self.config
-
         if self.lifespan.should_exit:
             sys.exit(STARTUP_SHUTDOWN_FAILURE)
+
+        config = self.config
 
         configuration = QuicConfiguration(
             alpn_protocols=H3_ALPN,
@@ -132,22 +129,43 @@ class RivenServer: # riven server and lifecycle manager
             keyfile=config.ssl_keyfile,
             password=config.ssl_keyfile_password
         )
-
-        self.server = await serve(
-            host=config.host,
-            port=config.port,
-            configuration=configuration,
-            create_protocol=lambda *args, **kwargs:
-            RivenH3(
-                self.config,
-                self.lifespan.state.copy(),
-                self.server_state,
-                *args,
-                **kwargs
+        try:
+            self.server = await serve(
+                host=config.host,
+                port=config.port,
+                configuration=configuration,
+                create_protocol=lambda *args, **kwargs:
+                RivenH3(
+                    self.config,
+                    self.lifespan.state.copy(),
+                    self.server_state,
+                    *args,
+                    **kwargs
+                )
             )
-        )
+        except OSError as exc:
+            logger.error(exc)
+            await self.lifespan.shutdown()
+            sys.exit(STARTUP_SHUTDOWN_FAILURE)
+
+        self.log_server_started()
 
         self.started = True
+
+    def log_server_started(self):
+        config = self.config
+        host = config.host
+
+        addr_format = "https://%s:%d" # https://host:port
+
+        if ":" in host: # Host address is IPV6 must be wrapped in brackets [host]
+            addr_format = "https://[%s]:%d" # https://[host]:port
+
+        port = config.port
+
+        msg = f"Riven running on {addr_format} (Press CTRL+C to exit)"
+        color_message = "Riven running on " + colorize(addr_format,ANSIColor.BRIGHT_BOLD_WHITE,enabled=True) + " (Press CTRL+C to exit)"
+        logger.info(msg,host,port,extra={'color_message':color_message})
 
     @contextlib.contextmanager
     def intercept_signals(self) -> Generator[None,None,None]:
