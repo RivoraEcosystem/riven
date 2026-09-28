@@ -12,3 +12,5 @@ rivenenv/
 Logs/
 .vscode/
 known_bugs.py
+benchmarks/
+tests/

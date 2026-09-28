@@ -92,9 +92,82 @@ class InvalidPath(RivenException):
 
         super().__init__(message)
 
-class InvalidStreamContext(RivenException):
+class InvalidStream(RivenException):
     """Raised when an invalid object is stored as a stream context."""
-    def __init__(self, context:Any):
-        self.context = context
+    def __init__(self, context:Any,expected:type):
+        super().__init__(f"Unexpected StreamContext expected {expected.__name__}, got {type(context).__name__}")
 
-        super().__init__(f"Unexpected StreamContext , got {type(context).__name__}")
+
+class InvalidLifespanState(RivenException):
+    """Raised when an invalid lifespan state transition occurs."""
+
+    def __init__(
+        self,
+        state: Any,
+        event: Any,
+    ):
+        self.state = state
+        self.event = event
+
+        state_name = getattr(state, "name", str(state))
+        event_name = getattr(event, "name", str(event))
+
+        super().__init__(
+            f"Invalid lifespan transition: state={state_name}, event={event_name}"
+        )
+
+
+class LifespanAlreadyCompleted(RivenException):
+    """Raised when a lifespan phase completes more than once."""
+
+    def __init__(self, phase: str):
+        self.phase = phase
+        super().__init__(f"Lifespan {phase} has already completed.")
+
+
+class LifespanNotStarted(RivenException):
+    """Raised when a lifespan completion event is received before the phase starts."""
+
+    def __init__(self, phase: str):
+        self.phase = phase
+        super().__init__(f"Lifespan {phase} has not been started.")
+
+class InvalidEventField(RivenException):
+    """Raised when an event field has an invalid type."""
+
+    def __init__(
+        self,
+        field: str,
+        got: type,
+        expected: type,
+    ) -> None:
+        super().__init__(
+            f"Invalid field {field!r} in event.\n"
+            f"Expected: {expected.__name__}\n"
+            f"Got: {got.__name__}"
+        )
+
+class InvalidStatusCode(RivenException):
+    """Raised when an event sends invalid http status code"""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+
+class ClientDisconnected(RivenException):
+    pass
+
+class MalformedRequest(RivenException):
+    pass
+
+class UnsupportedMethod(RivenException):
+    "Valid HTTP method not supported by Riven"
+    def __init__(
+            self,
+            method:str):
+        super().__init__(f"Unsupported HTTP Method {method}")
+
+class H3MalformedMessage(RivenException):
+    """Raised when Request Message contains Invalid headers according to HTTP3 schematic"""
+    
+class H3MalformedResponseMessage(RivenException):
+    """Raised when Response Message contains Invalid headers according to HTTP3 schematic"""
