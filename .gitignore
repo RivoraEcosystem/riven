@@ -14,3 +14,4 @@ Logs/
 known_bugs.py
 benchmarks/
 tests/
+*.pem 

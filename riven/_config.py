@@ -208,7 +208,7 @@ class RivenConfig:
                 sys.exit(STARTUP_SHUTDOWN_FAILURE)
         else:
             if not self.app_factory: # factory detected but app factory settings not turned on
-                logger.error("App Factory Detected please turn on app factory settings")
+                logger.error("App Factory Detected please turn on app factory with --factory")
                 sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
         self.loaded = True
