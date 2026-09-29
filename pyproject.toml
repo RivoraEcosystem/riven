@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "riven"
+version = "0.1.0"
+description = "An HTTP/3 server for Python RCP and ASGI applications"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "BSD-3-Clause"
+authors = [{ name = "Bhavya Malhotra" }]
+keywords = ["http3", "quic", "asgi", "rcp", "server", "rivora"]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+]
+
+dependencies = [
+    "aioquic>=1.3.0",
+    "click>=8.1",
+    "rivora-rcp",
+]
+
+[project.scripts]
+riven = "riven.main:main"
+
+[project.optional-dependencies]
+standard = [
+    "uvloop; sys_platform == 'linux' or sys_platform == 'darwin'",
+    "winloop; sys_platform == 'win32'",
+]
+
+[project.urls]
+Homepage = "https://github.com/RivoraEcosystem/riven"
+Repository = "https://github.com/RivoraEcosystem/riven"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["riven*"]
+namespaces = true
+
+[tool.setuptools]
+include-package-data = true
