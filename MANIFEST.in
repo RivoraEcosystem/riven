@@ -1,0 +1,18 @@
+include README.md
+include LICENSE
+
+recursive-include riven *.py
+
+prune benchmarks
+prune project_files
+prune rivenenv
+prune tests
+
+exclude test.py
+
+global-exclude *.py[cod]
+global-exclude __pycache__/*
+global-exclude *.pem
+global-exclude *.key
+global-exclude *.crt
+global-exclude *.cer
