@@ -49,7 +49,32 @@ class RivenConfig:
     @property
     def max_header_size(self) -> int:
         return self.max_header_size_kb * 1024
-    
+
+    __slot__ = (
+        "app",
+        "host",
+        "port",
+        "max_header_size_kb",
+        "root_path",
+        "log_config",
+        "headers",
+        "server_header",
+        "ssl_keyfile",
+        "ssl_certfile",
+        "ssl_keyfile_password",
+        "access_log",
+        "use_colors",
+        "log_level",
+        "application_interface",
+        "app_factory",
+        "lifespan",
+        "loop",
+        "shutdown_timeout",
+        "encoded_headers",
+        "loaded",
+        "lifespan_class",
+        "loaded_application",
+    )
 
     def __init__(
         self,
