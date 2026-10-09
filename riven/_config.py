@@ -74,6 +74,7 @@ class RivenConfig:
         "loaded",
         "lifespan_class",
         "loaded_application",
+        "enable_webtransport"
     )
 
     def __init__(
@@ -97,6 +98,7 @@ class RivenConfig:
         lifespan:LIFESPAN = "on",
         loop:LOOP_FACTORY_TYPE|str = "auto",
         shutdown_timeout:int = 5,
+        enable_webtransport:bool = True
     ):
         self.app = app
         self.host = host
@@ -117,6 +119,7 @@ class RivenConfig:
         self.lifespan = lifespan
         self.loop = loop
         self.shutdown_timeout = shutdown_timeout
+        self.enable_webtransport = enable_webtransport
 
         self.encoded_headers: list[tuple[bytes, bytes]] = []
         self.loaded = False

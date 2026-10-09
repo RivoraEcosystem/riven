@@ -161,6 +161,12 @@ def echo_version(ctx:click.Context,param:click.Parameter,value:bool) -> None:
     is_eager=True,
     help="Display the Riven version and exit.",
 )
+@click.option(
+    "--enable-webtransport/--disable-webtransport",
+    is_flag=True,
+    default=True,
+    help="Enable/Disable WebTransport support.",
+)
 
 
 def main(
@@ -181,7 +187,8 @@ def main(
     factory:bool,
     lifespan:str,
     loop:str,
-    shutdown_timeout:int
+    shutdown_timeout:int,
+    enable_webtransport:bool
 ) -> None:
     run(
         app=app,
@@ -201,7 +208,8 @@ def main(
         factory=factory,
         lifespan=lifespan,
         loop=loop,
-        shutdown_timeout=shutdown_timeout
+        shutdown_timeout=shutdown_timeout,
+        enable_webtransport=enable_webtransport
     )
 
 def run(
@@ -223,7 +231,8 @@ def run(
     factory:bool = True,
     lifespan:str = "on",
     loop:LOOP_FACTORY_TYPE|str = "auto",
-    shutdown_timeout:int = 5
+    shutdown_timeout:int = 5,
+    enable_webtransport:bool = True
 ):
     config = RivenConfig(
         app=app,
@@ -243,7 +252,8 @@ def run(
         app_factory=factory,
         lifespan=lifespan,
         loop=loop,
-        shutdown_timeout=shutdown_timeout
+        shutdown_timeout=shutdown_timeout,
+        enable_webtransport=enable_webtransport
     )
 
     config.import_app()
