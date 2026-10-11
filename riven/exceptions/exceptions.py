@@ -95,7 +95,7 @@ class InvalidPath(RivenException):
 class InvalidStream(RivenException):
     """Raised when an invalid object is stored as a stream context."""
     def __init__(self, context:Any,expected:type):
-        super().__init__(f"Unexpected StreamContext expected {expected.__name__}, got {type(context).__name__}")
+        super().__init__(f"Unexpected Stream Type expected {expected.__name__}, got {type(context).__name__}")
 
 
 class InvalidLifespanState(RivenException):
@@ -171,3 +171,6 @@ class H3MalformedMessage(RivenException):
     
 class H3MalformedResponseMessage(RivenException):
     """Raised when Response Message contains Invalid headers according to HTTP3 schematic"""
+
+class WebTransportConnectStreamEnded(RivenException):
+    """Raised When WebTransport CONNECT stream is set to end before establishing the Session"""

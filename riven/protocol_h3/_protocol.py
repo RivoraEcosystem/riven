@@ -25,11 +25,13 @@ from aioquic.h3.connection import (
 from aioquic.buffer import Buffer
 from rcp import (
     HTTPScope,
+    WebTransportScope,
     ScopeType,
     HTTPVersions,
     RequestMethod,
     HTTPScheme,
-    H3_FORBIDDEN_HEADERS
+    H3_FORBIDDEN_HEADERS,
+    WEBTRANSPORT_EXTENSION
 )
 from ._stream_utils import HTTP3Stream , ConnectionInfo
 import asyncio
@@ -40,7 +42,7 @@ from typing import TYPE_CHECKING
 from .._config import APPLICATION_INTERFACE_SPEC , RivenConfig
 if TYPE_CHECKING:
     from ..server import RivenState
-
+from .events import WebTransportSessionStart
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
@@ -84,6 +86,9 @@ def send_goaway_and_disconnect(
     protocol.transmit()
 
 class RivenH3(QuicConnectionProtocol):
+    """
+    Riven HTTP/3 Quic protocol wrapper over aioquic QuicConnectionProtocol to handle HTTP/3 events and manage streams, connections, and application state. It also implements custom logic for handling headers, stream creation, and connection termination.
+    """
     def __init__(
             self,
             config:RivenConfig,
@@ -99,7 +104,7 @@ class RivenH3(QuicConnectionProtocol):
         self.config= config
         self.app_state = app_state
         self.server_state = server_state
-        self._active_streams:dict[int,HTTP3Stream] = dict()
+        self._active_streams_sessions:dict[int,HTTP3Stream] = dict()
         self._http = None
         self._disconnected = False
         self.server_state.add_connection(self) # add connection to server state
@@ -110,7 +115,7 @@ class RivenH3(QuicConnectionProtocol):
     def quic_event_received(self, event):
         if isinstance(event, ProtocolNegotiated):
             if event.alpn_protocol == H3_ALPN[0]: # confirm HTTP3
-                self._http = H3Protocol(self._quic) # Upgrade to HTTP3
+                self._http = H3Protocol(quic=self._quic,enable_webtransport=self.config.enable_webtransport) # Upgrade to HTTP3
 
         elif isinstance(event,ConnectionTerminated):
             self._schedule_disconnect(event)
@@ -127,16 +132,16 @@ class RivenH3(QuicConnectionProtocol):
 
                     self._create_stream(event=http_event)
                 elif isinstance(http_event,DataReceived):
-                    stream = self._active_streams.get(http_event.stream_id)
+                    stream = self._active_streams_sessions.get(http_event.stream_id)
 
                     if not isinstance(stream,HTTP3Stream):
-                        self._http._quic.reset_stream(stream_id=http_event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
+                        self._quic.reset_stream(stream_id=http_event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
                         self.transmit()
                         protocol_logger.error("Failed to handle HTTP/3 DataReceived event for stream %d - Invalid Stream",http_event.stream_id)
                         return
 
                     if stream._closed:
-                        self._http._quic.reset_stream(stream_id=http_event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
+                        self._quic.reset_stream(stream_id=http_event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
                         self.transmit()
                         stream._stream_reset = True
                         protocol_logger.error("Failed to handle HTTP/3 DataReceived event for stream %d - Stream Closed By Application",http_event.stream_id)
@@ -183,6 +188,7 @@ class RivenH3(QuicConnectionProtocol):
             authority = None
             normal_header = False
             host = None
+            protocol = None
 
 
             # Iterate instead of using dict() to preserve duplicate HTTP headers
@@ -200,21 +206,19 @@ class RivenH3(QuicConnectionProtocol):
                         if method is not None:
                             raise exceptions.H3MalformedMessage("Duplicate pseudo header :method")
                         try:
-                            method = RequestMethod(value.decode("ascii")) # accept only Uppercase Methods 
-                            # Reject CONNECT method
-                            if method == RequestMethod.CONNECT:
+                            method = RequestMethod(value) # accept only Uppercase Methods 
+                            if method == RequestMethod.CONNECT and not self.config.enable_webtransport: # reject CONNECT method if WebTransport is not enabled
                                 raise exceptions.UnsupportedMethod("CONNECT")
-    
                         except ValueError:
-                            raise exceptions.MethodNotAllowed(value.decode("ascii"))
+                            raise exceptions.MethodNotAllowed(value.decode("ascii", "replace"))
     
                     elif name == b":scheme":
                         if scheme is not None:
                             raise exceptions.H3MalformedMessage("Duplicate pseudo header :scheme")
                         try:
-                            scheme = HTTPScheme(value.decode("ascii").lower())
+                            scheme = HTTPScheme(value)
                         except ValueError:
-                            raise exceptions.InvalidScheme(value.decode("ascii"))
+                            raise exceptions.InvalidScheme(value.decode("ascii", "replace"))
     
                     elif name == b":authority":
                         if authority is not None:
@@ -228,6 +232,11 @@ class RivenH3(QuicConnectionProtocol):
                         if raw_target is not None:
                             raise exceptions.H3MalformedMessage("Duplicate pseudo header :path")
                         raw_target = value
+
+                    elif name == b":protocol":
+                        if protocol is not None:
+                            raise exceptions.H3MalformedMessage("Duplicate pseudo header :protocol")
+                        self.protocol = value
 
                     else:
                         raise exceptions.InvalidPseudoHeader(name.decode("ascii", "replace"))
@@ -262,6 +271,10 @@ class RivenH3(QuicConnectionProtocol):
                         ":authority and Host do not match"
                     )
 
+            # Validate :protocol pseudo header for WebTransport
+            if protocol is not None and protocol != b"webtransport":
+                raise exceptions.H3MalformedMessage("Invalid value for pseudo header :protocol - must be 'webtransport'")
+
             if self.config.application_interface == "asgi" and not host:
                 headers.append((b"host",authority.encode("ascii"))) # add host header if application_interface is set to ASGI
             
@@ -286,48 +299,81 @@ class RivenH3(QuicConnectionProtocol):
             client = self._quic._network_paths[0].addr # client info from network paths 
             server = self._transport.get_extra_info("sockname") # server info from _transport
 
-            http_scope: HTTPScope = {
-                "type": ScopeType.HTTP,
-                "http_version": HTTPVersions.HTTP3,
-                "method": method,
-                "scheme": scheme,
-                "authority": authority,
-                "path": path,
-                "raw_path": raw_path,
-                "query_string": query_string,
-                "root_path": self.config.root_path,
-                "headers": headers,
-                "client": client,
-                "server": server,
-                "state" : self.app_state.copy()
-            }
 
-            if self.config.application_interface == "asgi":
-                http_scope['asgi'] = APPLICATION_INTERFACE_SPEC['asgi']
+            if method == RequestMethod.CONNECT:
+                if event.stream_ended:
+                    raise exceptions.WebTransportConnectStreamEnded("WebTransport CONNECT Stream ended before establishing session")
+
+                scope: WebTransportScope = {
+                    "type": ScopeType.WEBTRANSPORT,
+                    'rcp': APPLICATION_INTERFACE_SPEC['rcp'],
+                    "http_version": HTTPVersions.HTTP3,
+                    "method": method,
+                    "scheme": scheme,
+                    "authority": authority,
+                    "path": path,
+                    "raw_path": raw_path,
+                    "query_string": query_string,
+                    "root_path": self.config.root_path,
+                    "headers": headers,
+                    "client": client,
+                    "server": server,
+                    "state" : self.app_state.copy(),
+                }
+
+                session = WebTransportSessionProtocol(
+                    protocol=self,
+                    scope=scope
+                )
+                # add session to active sessions
+                self._active_streams_sessions[event.stream_id] = session
+                return                
+
+
+
             else:
-                http_scope['rcp'] = APPLICATION_INTERFACE_SPEC['rcp'] 
-
-            connection = ConnectionInfo(
-                stream_id=event.stream_id,
-                server=server,
-                client=client,
-            )
-
-            stream = HTTP3Stream( # build http stream context
-                connection=connection,
-                stream_id=event.stream_id,
-                scope=http_scope,
-                protocol=self,
-            )
-
-            if self._disconnected:
-                return
-            
-            self._active_streams[event.stream_id] = stream
-            app = self.config.loaded_application
-            application_task = asyncio.get_event_loop().create_task(stream.run_rcp(app=app)) # create task
-            self.server_state.application_tasks.add(application_task) # store task in server state
-            application_task.add_done_callback(self.server_state.application_tasks.discard) # remove task on done
+                http_scope: HTTPScope = {
+                    "type": ScopeType.HTTP,
+                    "http_version": HTTPVersions.HTTP3,
+                    "method": method,
+                    "scheme": scheme,
+                    "authority": authority,
+                    "path": path,
+                    "raw_path": raw_path,
+                    "query_string": query_string,
+                    "root_path": self.config.root_path,
+                    "headers": headers,
+                    "client": client,
+                    "server": server,
+                    "state" : self.app_state.copy()
+                }
+    
+                if self.config.application_interface == "asgi":
+                    http_scope['asgi'] = APPLICATION_INTERFACE_SPEC['asgi']
+                else:
+                    http_scope['rcp'] = APPLICATION_INTERFACE_SPEC['rcp'] 
+    
+                connection = ConnectionInfo(
+                    stream_id=event.stream_id,
+                    server=server,
+                    client=client,
+                )
+    
+                stream = HTTP3Stream( # build http stream
+                    connection=connection,
+                    stream_id=event.stream_id,
+                    scope=http_scope,
+                    protocol=self,
+                )
+    
+                if self._disconnected:
+                    return
+                
+                self._active_streams_sessions[event.stream_id] = stream
+                app = self.config.loaded_application
+                application_task = asyncio.get_event_loop().create_task(stream.run_rcp(app=app)) # create task
+                self.server_state.application_tasks.add(application_task) # store task in server state
+                application_task.add_done_callback(self.server_state.application_tasks.discard) # remove task on done
 
         except (
             exceptions.InvalidPath,
@@ -339,12 +385,12 @@ class RivenH3(QuicConnectionProtocol):
             exceptions.MalformedRequest,
             exceptions.H3MalformedMessage
             ) as err:
-            self._http._quic.reset_stream(stream_id=event.stream_id,error_code=ErrorCode.H3_MESSAGE_ERROR) # reset stream on request malformed errors
+            self._quic.reset_stream(stream_id=event.stream_id,error_code=ErrorCode.H3_MESSAGE_ERROR) # reset stream on request malformed errors
             self.transmit()
             protocol_logger.error("Malformed HTTP/3 request received on stream %d",event.stream_id,exc_info=err)
             
         except exceptions.InvalidEvent as err:
-            self._http._quic.reset_stream(stream_id=event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
+            self._quic.reset_stream(stream_id=event.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
             self.transmit()
             protocol_logger.error("Malformed HTTP/3 request received on stream %d",event.stream_id,exc_info=err)
 
@@ -359,7 +405,7 @@ class RivenH3(QuicConnectionProtocol):
                 end_stream=True # Smooth termination of response
             )
             self.transmit()
-            protocol_logger.error("Unsupported HTTP/3 request received on stream %d",event.stream_id,exc_info=err)
+            protocol_logger.error("WebTransport CONNECT request received on stream %d please enable WebTransport using --enable-webtransport",event.stream_id,exc_info=err)
 
     def _schedule_disconnect(
         self,
@@ -371,7 +417,7 @@ class RivenH3(QuicConnectionProtocol):
                 raise exceptions.InvalidEvent(event)
             self._disconnected = True
 
-            for stream in self._active_streams.values():
+            for stream in self._active_streams_sessions.values():
                 try:
                     if not isinstance(stream,HTTP3Stream):
                         continue
@@ -390,17 +436,17 @@ class RivenH3(QuicConnectionProtocol):
             if not isinstance(event, (StreamReset, StopSendingReceived)):
                 raise exceptions.InvalidEvent(event)
 
-            context = self._active_streams.get(event.stream_id)
+            stream = self._active_streams_sessions.get(event.stream_id)
 
-            if context is None:
+            if stream is None:
                 # Stream already closed/reset or unknown stream
                 return
 
-            if not isinstance(context,HTTP3Stream):
-                raise exceptions.InvalidStream(context,HTTP3Stream)
+            if not isinstance(stream,HTTP3Stream):
+                raise exceptions.InvalidStream(stream,HTTP3Stream)
 
-            context.close()
-            context._stream_reset = True
+            stream.close()
+            stream._stream_reset = True
             
         except (exceptions.InvalidEvent, exceptions.InvalidStream) as err:
             protocol_logger.error("Failed to handle HTTP/3 stream interrupt for stream %d",event.stream_id,exc_info=err)
@@ -419,3 +465,4 @@ class H3Protocol(H3Connection):
 
     def __init__(self, quic, enable_webtransport = False):
         super().__init__(quic, enable_webtransport)
+
