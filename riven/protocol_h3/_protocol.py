@@ -31,7 +31,11 @@ from rcp import (
     RequestMethod,
     HTTPScheme,
     H3_FORBIDDEN_HEADERS,
-    WEBTRANSPORT_EXTENSION
+    WEBTRANSPORT_EXTENSION,
+    RCPApplication,
+    WebtransportSendEvent,
+    Reader,
+    Writer
 )
 from ._stream_utils import HTTP3Stream , ConnectionInfo
 import asyncio
@@ -236,7 +240,7 @@ class RivenH3(QuicConnectionProtocol):
                     elif name == b":protocol":
                         if protocol is not None:
                             raise exceptions.H3MalformedMessage("Duplicate pseudo header :protocol")
-                        self.protocol = value
+                        protocol = value
 
                     else:
                         raise exceptions.InvalidPseudoHeader(name.decode("ascii", "replace"))
@@ -259,7 +263,7 @@ class RivenH3(QuicConnectionProtocol):
                 raise exceptions.MethodNotAllowed()
             
             if scheme in (HTTPScheme.HTTP, HTTPScheme.HTTPS):
-                if authority is None or authority == b"":
+                if authority is None or authority == "":
                     raise exceptions.InvalidAuthority()
                 
             if raw_target is None:
@@ -301,12 +305,15 @@ class RivenH3(QuicConnectionProtocol):
 
 
             if method == RequestMethod.CONNECT:
+                if protocol != b"webtransport":
+                    raise exceptions.H3MalformedMessage(
+                        "CONNECT requires :protocol = webtransport"
+                    )
                 if event.stream_ended:
                     raise exceptions.WebTransportConnectStreamEnded("WebTransport CONNECT Stream ended before establishing session")
 
                 scope: WebTransportScope = {
                     "type": ScopeType.WEBTRANSPORT,
-                    'rcp': APPLICATION_INTERFACE_SPEC['rcp'],
                     "http_version": HTTPVersions.HTTP3,
                     "method": method,
                     "scheme": scheme,
@@ -320,11 +327,17 @@ class RivenH3(QuicConnectionProtocol):
                     "server": server,
                     "state" : self.app_state.copy(),
                 }
+                if self.config.application_interface == "asgi":
+                    scope['asgi'] = APPLICATION_INTERFACE_SPEC['asgi']
+                else:
+                    scope['rcp'] = APPLICATION_INTERFACE_SPEC['rcp']
 
                 session = WebTransportSessionProtocol(
                     protocol=self,
                     scope=scope
                 )
+
+                session.handle_session_start() # complete webtransport session handshake before adding it to active streams mapping
                 # add session to active sessions
                 self._active_streams_sessions[event.stream_id] = session
                 return                
@@ -458,6 +471,9 @@ class RivenH3(QuicConnectionProtocol):
             for name, value in headers
         )
 
+    def is_lowercase_header(name: bytes) -> bool: # return True only if there is no uppercase character 
+        return not any(65 <= c <= 90 for c in name)
+
 class H3Protocol(H3Connection):
     """
     A High-level HTTP/3 wrapper for aioquic's H3Connection.
@@ -466,3 +482,149 @@ class H3Protocol(H3Connection):
     def __init__(self, quic, enable_webtransport = False):
         super().__init__(quic, enable_webtransport)
 
+    def send_headers(
+        self, stream_id: int, headers: Headers, end_stream: bool = False
+    ) -> None:
+        """
+        Send headers on the given stream.
+    
+        .. aioquic_transmit::
+    
+        :param stream_id: The stream ID on which to send the headers.
+        :param headers: The HTTP headers to send.
+        :param end_stream: Whether to end the stream.
+        """
+        informational_response_headers = self.is_informational_response(headers=headers)
+
+        if informational_response_headers and end_stream:
+            raise ProtocolError("Informational headers (1xx) cannot end the stream.")
+
+        # check HEADERS frame is allowed
+        with self._get_or_create_stream(stream_id) as stream:
+            if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
+                raise FrameUnexpected("HEADERS frame is not allowed in this state")
+
+            # Cannot send informational headers after final headers were already sent
+            if (
+                informational_response_headers
+                and stream.headers_send_state != HeadersState.INITIAL
+            ):
+                raise FrameUnexpected("Informational headers cannot be sent after final headers.")
+            
+            if end_stream:
+                stream.finish_sending()
+            frame_data = self._encode_headers(stream_id, headers)
+            # log frame
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="http",
+                    event="frame_created",
+                    data=self._quic_logger.encode_http3_headers_frame(
+                        length=len(frame_data), headers=headers, stream_id=stream_id
+                    ),
+                )
+            # update state and send headers
+            if not informational_response_headers:
+                if stream.headers_send_state == HeadersState.INITIAL:
+                    stream.headers_send_state = HeadersState.AFTER_HEADERS
+                else:
+                    stream.headers_send_state = HeadersState.AFTER_TRAILERS
+            self._quic.send_stream_data(
+                stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
+            )
+
+    def is_informational_response(self,headers:Headers) -> bool:
+        """
+        Check if `:status` contains Informational response status code (1xx)
+        """
+        for key , value in headers:
+            try:
+                if (key == b":status" and (100 <= int(value) <= 199)):# status code between 100-199 (1xx) and not 101 (switching protocol)
+                    if (value == b"101"):
+                        raise MessageError("Header :status contains forbidden 101 status code")
+                    return True
+            except ValueError as exc:
+                raise MessageError("Header %r contains invalid characters" % key) from exc
+        return False
+
+class WebTransportSessionProtocol:
+    """"
+    High level wrapper for WebTransport over HTTP/3 to handle WebTransport specific events and streams.
+    """
+    def __init__(
+            self,
+            protocol:RivenH3,
+            scope:dict
+        ):
+    
+        self._protocol = protocol
+        self._quic = protocol._quic
+        self._http = protocol._http
+        self.config = protocol.config
+        self.scope = scope
+        self.server_state = protocol.server_state
+        self._body:bytearray = bytearray()
+
+        self.method:bytes|None = None
+        self.protocol:bytes|None = None
+        self.scheme:bytes|None = None
+        self.authority:bytes|None = None
+        self.path:bytes|None = None
+        self.stream_id:int|None = None
+        self.session_id:int|None = None
+
+        
+
+    def handle_webtransport_event(self, event) -> None:
+        """
+        Handle WebTransport specific events.
+        """
+        pass
+
+    def handle_session_start(self) -> None:
+        """
+        Handle the WebTransport Session establishment invoke RCP Application.
+        """
+        try:
+            if self.config.application_interface == "asgi":
+                self.scope["extensions"] = WEBTRANSPORT_EXTENSION
+
+            app = self.config.loaded_application
+            loop = asyncio.get_running_loop()
+
+            app_task = loop.create_task(self.run_rcp(app=app))
+
+            self.server_state.application_tasks.add(app_task)
+            app_task.add_done_callback(self.server_state.application_tasks.discard)
+        
+        except (
+            exceptions.InvalidEvent
+            ) as err:
+            self._quic.reset_stream(stream_id=self.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
+            self._protocol.transmit()
+            protocol_logger.error("Failed to handle WebTransport CONNECT for session-id %d",self.stream_id,exc_info=err)
+
+    async def run_rcp(self,app:RCPApplication) -> None:
+        try:
+            result = await app(self.scope, self.receive, self.send)
+        
+        except Exception as exc:
+        
+            msg = "Exception in RCP application\n"
+            protocol_logger.error(msg, exc_info=exc)
+        else:
+            if result is not None:
+                msg = f"RCP Application should return None, but returned {result}."
+                protocol_logger.error(msg)
+
+    async def receive(self) -> None:
+        try:
+            ...
+        except:
+            ...
+
+    async def send(self,event:WebtransportSendEvent)-> None|tuple[Writer,Reader]:
+        try:
+            ...
+        except:
+            ...
