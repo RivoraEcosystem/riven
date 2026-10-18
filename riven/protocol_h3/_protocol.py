@@ -34,11 +34,24 @@ from rcp import (
     WEBTRANSPORT_EXTENSION,
     RCPApplication,
     WebtransportSendEvent,
+    WebtransportReceiveEvent,
+    WebTransportSessionAccept,
+    WebTransportSessionClose,
+    WebTransportSessionReject,
+    WebTransportSessionDisconnect,
+    WebTransportClientUnidirectionalStreamStarted,
+    WebTransportClientBidirectionalStreamStarted,
+    WebTransportDatagramReceived,
+    WebTransportConnectionEventType,
+    WebTransportUnidirectionalStreamEventType,
+    WebTransportBidirectionalStreamEventType,
+    WebTransportDatagramEventType,
     Reader,
     Writer
 )
 from ._stream_utils import HTTP3Stream , ConnectionInfo
 import asyncio
+from asyncio import Queue , QueueShutDown
 from ..exceptions import exceptions
 from typing import Any
 import logging
@@ -551,6 +564,9 @@ class WebTransportSessionProtocol:
     """"
     High level wrapper for WebTransport over HTTP/3 to handle WebTransport specific events and streams.
     """
+
+    _CLOSED = 1 << 0
+
     def __init__(
             self,
             protocol:RivenH3,
@@ -563,17 +579,35 @@ class WebTransportSessionProtocol:
         self.config = protocol.config
         self.scope = scope
         self.server_state = protocol.server_state
-        self._body:bytearray = bytearray()
+        self._queue:Queue[WebtransportReceiveEvent] = Queue()
 
-        self.method:bytes|None = None
-        self.protocol:bytes|None = None
-        self.scheme:bytes|None = None
-        self.authority:bytes|None = None
-        self.path:bytes|None = None
-        self.stream_id:int|None = None
+        self._flags:int = 0
+
+        # session disconnect info
+        self.disconnected:bool = False
+        self.disconnect_event:WebTransportSessionDisconnect|None = None
         self.session_id:int|None = None
 
+
+
+    def _get_flag(self,mask:int) -> bool:
+                return bool(self._flags & mask)
         
+    def _set_flag(self, mask: int, value: bool) -> None:
+        if value:
+            self._flags |= mask
+        else:
+            self._flags &= ~mask
+
+    @property
+    def _closed(self) -> bool:
+        return self._get_flag(self._CLOSED)
+    
+    @_closed.setter
+    def _closed(self,value:bool) -> None:
+        self._set_flag(self._CLOSED, value)
+
+
 
     def handle_webtransport_event(self, event) -> None:
         """
@@ -585,24 +619,17 @@ class WebTransportSessionProtocol:
         """
         Handle the WebTransport Session establishment invoke RCP Application.
         """
-        try:
-            if self.config.application_interface == "asgi":
-                self.scope["extensions"] = WEBTRANSPORT_EXTENSION
 
-            app = self.config.loaded_application
-            loop = asyncio.get_running_loop()
+        if self.config.application_interface == "asgi":
+            self.scope["extensions"] = WEBTRANSPORT_EXTENSION
 
-            app_task = loop.create_task(self.run_rcp(app=app))
+        app = self.config.loaded_application
+        loop = asyncio.get_running_loop()
 
-            self.server_state.application_tasks.add(app_task)
-            app_task.add_done_callback(self.server_state.application_tasks.discard)
-        
-        except (
-            exceptions.InvalidEvent
-            ) as err:
-            self._quic.reset_stream(stream_id=self.stream_id,error_code=ErrorCode.H3_INTERNAL_ERROR)
-            self._protocol.transmit()
-            protocol_logger.error("Failed to handle WebTransport CONNECT for session-id %d",self.stream_id,exc_info=err)
+        app_task = loop.create_task(self.run_rcp(app=app))
+
+        self.server_state.application_tasks.add(app_task)
+        app_task.add_done_callback(self.server_state.application_tasks.discard)
 
     async def run_rcp(self,app:RCPApplication) -> None:
         try:
@@ -619,9 +646,16 @@ class WebTransportSessionProtocol:
 
     async def receive(self) -> None:
         try:
-            ...
-        except:
-            ...
+            if self.disconnected:
+                return self.disconnect_event
+            
+            event = await self._queue.get()
+            return event
+        
+        except QueueShutDown:
+            if self.disconnected:
+                return self.disconnect_event
+            
 
     async def send(self,event:WebtransportSendEvent)-> None|tuple[Writer,Reader]:
         try:
