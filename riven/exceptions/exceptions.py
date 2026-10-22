@@ -174,3 +174,6 @@ class H3MalformedResponseMessage(RivenException):
 
 class WebTransportConnectStreamEnded(RivenException):
     """Raised When WebTransport CONNECT stream is set to end before establishing the Session"""
+
+class CapsuleError(RivenException):
+    """Raised When WebTransport Capsules have error during parsing or validation"""
