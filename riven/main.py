@@ -1,21 +1,24 @@
-from riven._config import (
-    LOG_LEVELS,
-    APPLICATION_INTERFACE_SPEC,
-    LIFESPAN_CLASS,
-    LOOP_FACTORIES,
-    LOOP_FACTORY_TYPE,
-    APPLICATION_INTERFACE,
-    RivenConfig
-)
-import riven
-from riven.server import RivenServer
-from rcp import RCPApplication
-import platform
 import logging
-import click
+import os
+import platform
 from collections.abc import Callable
 from typing import Any
-import os
+
+import click
+from rcp import RCPApplication
+
+from riven._config import (
+    APPLICATION_INTERFACE,
+    APPLICATION_INTERFACE_SPEC,
+    LIFESPAN_CLASS,
+    LOG_LEVELS,
+    LOOP_FACTORIES,
+    LOOP_FACTORY_TYPE,
+    RivenConfig,
+)
+from riven.server import RivenServer
+
+from ._version import __version__
 
 LOG_CHOICES = click.Choice(list(LOG_LEVELS.keys()))
 APPLICATION_INTERFACE_CHOICES = click.Choice(list(APPLICATION_INTERFACE_SPEC.keys()))
@@ -23,22 +26,24 @@ LIFESPAN_CHOICES = click.Choice(list(LIFESPAN_CLASS.keys()))
 LOOP_CHOICES = click.Choice(list(LOOP_FACTORIES.keys()))
 
 
-logger = logging.getLogger('riven')
+logger = logging.getLogger("riven")
 
-def echo_version(ctx:click.Context,param:click.Parameter,value:bool) -> None:
+
+def echo_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     if not value or ctx.resilient_parsing:
         return
 
     click.echo(
         "Running Riven {version} on system {system}".format(
-            version = riven.__version__,
+            version=__version__,
             system=platform.system(),
         )
     )
     ctx.exit()
 
-@click.command(context_settings={"auto_envvar_prefix" : "RIVEN"})
-@click.argument("app",envvar="RIVEN_APP")
+
+@click.command(context_settings={"auto_envvar_prefix": "RIVEN"})
+@click.argument("app", envvar="RIVEN_APP")
 @click.option(
     "--host",
     type=str,
@@ -79,20 +84,8 @@ def echo_version(ctx:click.Context,param:click.Parameter,value:bool) -> None:
     default=True,
     help="Enable/Disable default Server header.",
 )
-@click.option(
-    "--ssl-keyfile", 
-    type=str, 
-    default=None, 
-    help="SSL key file", 
-    show_default=True
-)
-@click.option(
-    "--ssl-certfile", 
-    type=str, 
-    default=None, 
-    help="SSL certificate file", 
-    show_default=True
-)
+@click.option("--ssl-keyfile", type=str, default=None, help="SSL key file", show_default=True)
+@click.option("--ssl-certfile", type=str, default=None, help="SSL certificate file", show_default=True)
 @click.option(
     "--ssl-keyfile-password",
     type=str,
@@ -161,27 +154,32 @@ def echo_version(ctx:click.Context,param:click.Parameter,value:bool) -> None:
     is_eager=True,
     help="Display the Riven version and exit.",
 )
-
-
+@click.option(
+    "--enable-webtransport/--disable-webtransport",
+    is_flag=True,
+    default=True,
+    help="Enable/Disable WebTransport support.",
+)
 def main(
-    app:str,
-    host:str,
-    port:int,
-    max_header_size:int,
-    root_path:str,
-    headers:list[str],
-    server_header:bool,
-    ssl_keyfile:str,
-    ssl_certfile:str,
-    ssl_keyfile_password:str,
-    access_log:bool,
-    use_colors:bool,
-    log_level:str,
-    application_interface:str,
-    factory:bool,
-    lifespan:str,
-    loop:str,
-    shutdown_timeout:int
+    app: str,
+    host: str,
+    port: int,
+    max_header_size: int,
+    root_path: str,
+    headers: list[str],
+    server_header: bool,
+    ssl_keyfile: str,
+    ssl_certfile: str,
+    ssl_keyfile_password: str,
+    access_log: bool,
+    use_colors: bool,
+    log_level: str,
+    application_interface: str,
+    factory: bool,
+    lifespan: str,
+    loop: str,
+    shutdown_timeout: int,
+    enable_webtransport: bool,
 ) -> None:
     run(
         app=app,
@@ -201,29 +199,32 @@ def main(
         factory=factory,
         lifespan=lifespan,
         loop=loop,
-        shutdown_timeout=shutdown_timeout
+        shutdown_timeout=shutdown_timeout,
+        enable_webtransport=enable_webtransport,
     )
 
+
 def run(
-    app: RCPApplication|Callable[...,Any]|str,
+    app: RCPApplication | Callable[..., Any] | str,
     *,
-    host:str = "127.0.0.1",
-    port:int = 8000,
-    max_header_size:int = 0,
-    root_path:str = "",
-    headers:list[tuple[str,str]] | None = None,
-    server_header:bool = True,
-    ssl_keyfile:str | os.PathLike[str] | None = None,
-    ssl_certfile:str | os.PathLike[str] | None = None,
-    ssl_keyfile_password:str|None = None,
-    access_log:bool = True,
-    use_colors:bool = True,
-    log_level:str|int|None = None,
-    application_interface:APPLICATION_INTERFACE|str = "rcp",
-    factory:bool = True,
-    lifespan:str = "on",
-    loop:LOOP_FACTORY_TYPE|str = "auto",
-    shutdown_timeout:int = 5
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    max_header_size: int = 0,
+    root_path: str = "",
+    headers: list[tuple[str, str]] | None = None,
+    server_header: bool = True,
+    ssl_keyfile: str | os.PathLike[str] | None = None,
+    ssl_certfile: str | os.PathLike[str] | None = None,
+    ssl_keyfile_password: str | None = None,
+    access_log: bool = True,
+    use_colors: bool = True,
+    log_level: str | int | None = None,
+    application_interface: APPLICATION_INTERFACE | str = "rcp",
+    factory: bool = True,
+    lifespan: str = "on",
+    loop: LOOP_FACTORY_TYPE | str = "auto",
+    shutdown_timeout: int = 5,
+    enable_webtransport: bool = True,
 ):
     config = RivenConfig(
         app=app,
@@ -243,7 +244,8 @@ def run(
         app_factory=factory,
         lifespan=lifespan,
         loop=loop,
-        shutdown_timeout=shutdown_timeout
+        shutdown_timeout=shutdown_timeout,
+        enable_webtransport=enable_webtransport,
     )
 
     config.import_app()
