@@ -1,0 +1,5 @@
+[codespell]
+check-filenames = true
+ignore-words-list = assertIn,quicly
+ignore-regex = \bb"te"|\bTE\b
+skip = *.bin,./build,./docs/_build,./env,./venv,rivenenv
