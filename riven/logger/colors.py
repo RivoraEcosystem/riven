@@ -51,7 +51,7 @@ class ANSIColor(StrEnum):
     BRIGHT_BOLD_MAGENTA = "\033[1;95m"
     BRIGHT_BOLD_CYAN = "\033[1;96m"
     BRIGHT_BOLD_WHITE = "\033[1;97m"
-    
+
 
 _LEVEL_COLORS: dict[int, ANSIColor] = {
     logging.DEBUG: ANSIColor.BRIGHT_BLACK,
@@ -127,6 +127,7 @@ def status_color(status_code: int) -> ANSIColor:
         return ANSIColor.YELLOW
 
     return ANSIColor.RED
+
 
 def status_phrase(status_code: int) -> str:
     try:

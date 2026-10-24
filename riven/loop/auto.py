@@ -5,13 +5,13 @@ import sys
 from collections.abc import Callable
 
 
-def auto_loop_factory() -> Callable[[],asyncio.AbstractEventLoop]:
+def auto_loop_factory() -> Callable[[], asyncio.AbstractEventLoop]:
 
     # Windows Platform
     if sys.platform == "win32":
         try:
-            import winloop
-        except ImportError: # winloop not installed fallback to asyncio
+            import winloop  # noqa: F401
+        except ImportError:  # winloop not installed fallback to asyncio
             from .asyncio import asyncio_loop_factory
 
             return asyncio_loop_factory()
@@ -22,10 +22,9 @@ def auto_loop_factory() -> Callable[[],asyncio.AbstractEventLoop]:
 
     # LINUX/MACOS Platform
     else:
-
         try:
-            import uvloop
-        except ImportError: # uvloop not install fallback to asyncio
+            import uvloop  # noqa: F401
+        except ImportError:  # uvloop not install fallback to asyncio
             from .asyncio import asyncio_loop_factory
 
             return asyncio_loop_factory()

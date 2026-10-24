@@ -20,34 +20,33 @@ LOG_LEVELS: dict[str, int] = {
     "debug": logging.DEBUG,
 }
 
-APPLICATION_INTERFACE_SPEC:dict[str, dict[str, str]] = {
-    'asgi' : {"version": "3.0", "spec_version": "2.4"},
-    'rcp' : {"version": "2.0"}
+APPLICATION_INTERFACE_SPEC: dict[str, dict[str, str]] = {
+    "asgi": {"version": "3.0", "spec_version": "2.4"},
+    "rcp": {"version": "2.0"},
 }
 
-LIFESPAN_CLASS:dict[str, str] = {
-    "on" : "riven.lifespan.lifespan:LifeSpanOn",
-    "off" : "riven.lifespan.lifespan:LifeSpanOff"
+LIFESPAN_CLASS: dict[str, str] = {
+    "on": "riven.lifespan.lifespan:LifeSpanOn",
+    "off": "riven.lifespan.lifespan:LifeSpanOff",
 }
 
 LOOP_FACTORIES: dict[str, str | None] = {
-    "none" : None,
-    "auto" : "riven.loop.auto:auto_loop_factory",
-    "asyncio" : "riven.loop.asyncio:asyncio_loop_factory",
-    "uvloop" : "riven.loop.uvloop:uvloop_loop_factory",
-    "winloop" : "riven.loop.winloop:winloop_loop_factory"
-} 
+    "none": None,
+    "auto": "riven.loop.auto:auto_loop_factory",
+    "asyncio": "riven.loop.asyncio:asyncio_loop_factory",
+    "uvloop": "riven.loop.uvloop:uvloop_loop_factory",
+    "winloop": "riven.loop.winloop:winloop_loop_factory",
+}
 
 LIFESPAN = Literal["on", "off"]
-APPLICATION_INTERFACE = Literal['rcp','asgi']
-LOOP_FACTORY_TYPE = Literal["none", "auto", "asyncio", "uvloop" , "winloop"]
+APPLICATION_INTERFACE = Literal["rcp", "asgi"]
+LOOP_FACTORY_TYPE = Literal["none", "auto", "asyncio", "uvloop", "winloop"]
 STARTUP_SHUTDOWN_FAILURE = 3
 
 logger = logging.getLogger("riven")
 
-class RivenConfig:
-    
 
+class RivenConfig:
     @property
     def max_header_size(self) -> int:
         return self.max_header_size_kb * 1024
@@ -76,31 +75,31 @@ class RivenConfig:
         "loaded",
         "lifespan_class",
         "loaded_application",
-        "enable_webtransport"
+        "enable_webtransport",
     )
 
     def __init__(
         self,
-        app:RCPApplication | str,
-        host:str = "127.0.0.1",
-        port:int = 8000,
-        max_header_size_kb:int = 0,
-        root_path:str = "",
-        log_config:Any = LOGGING_CONFIG,
+        app: RCPApplication | str,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        max_header_size_kb: int = 0,
+        root_path: str = "",
+        log_config: Any = LOGGING_CONFIG,
         headers: list[tuple[str, str]] | None = None,
-        server_header:bool = True,
+        server_header: bool = True,
         ssl_keyfile: str | os.PathLike[str] | None = None,
         ssl_certfile: str | os.PathLike[str] | None = None,
         ssl_keyfile_password: str | None = None,
         access_log: bool = True,
-        use_colors:bool = True,
-        log_level:str|int|None = None,
-        application_interface:APPLICATION_INTERFACE|str = 'rcp',
-        app_factory:bool = False,
-        lifespan:LIFESPAN = "on",
-        loop:LOOP_FACTORY_TYPE|str = "auto",
-        shutdown_timeout:int = 5,
-        enable_webtransport:bool = True
+        use_colors: bool = True,
+        log_level: str | int | None = None,
+        application_interface: APPLICATION_INTERFACE | str = "rcp",
+        app_factory: bool = False,
+        lifespan: LIFESPAN = "on",
+        loop: LOOP_FACTORY_TYPE | str = "auto",
+        shutdown_timeout: int = 5,
+        enable_webtransport: bool = True,
     ):
         self.app = app
         self.host = host
@@ -125,44 +124,47 @@ class RivenConfig:
 
         self.encoded_headers: list[tuple[bytes, bytes]] = []
         self.loaded = False
-        
+
         self.configure_logger()
 
     def configure_headers(self):
-        self.encoded_headers = [] # reset existing headers if any
-        encoded_headers = [(key.lower().encode("latin1"), value.encode("latin1")) for key, value in self.headers]
-        has_server = any(name == b"server" for name,_ in encoded_headers)
+        self.encoded_headers = []  # reset existing headers if any
+        encoded_headers = [
+            (key.lower().encode("latin1"), value.encode("latin1")) for key, value in self.headers
+        ]
+        has_server = any(name == b"server" for name, _ in encoded_headers)
         if self.server_header and not has_server:
-            self.encoded_headers = [(b'server',b'riven')] + encoded_headers # add server header and concat the list
+            # add server header and concat the list
+            self.encoded_headers = [(b"server", b"riven")] + encoded_headers
 
         for header in list(encoded_headers):
-            if header[0] in H3_FORBIDDEN_HEADERS: # omit forbidden headers
+            if header[0] in H3_FORBIDDEN_HEADERS:  # omit forbidden headers
                 continue
 
-            self.encoded_headers.append((header[0],header[1]))
+            self.encoded_headers.append((header[0], header[1]))
 
     def configure_logger(self) -> None:
         if self.log_config is not None:
-            if isinstance(self.log_config,os.PathLike):
+            if isinstance(self.log_config, os.PathLike):
                 self.log_config = os.fspath(self.log_config)
 
-            if isinstance(self.log_config,dict):
-                if self.use_colors in (True,False):
+            if isinstance(self.log_config, dict):
+                if self.use_colors in (True, False):
                     self.log_config["formatters"]["default"]["use_colors"] = self.use_colors
                     self.log_config["formatters"]["access"]["use_colors"] = self.use_colors
 
                 logging.config.dictConfig(self.log_config)
-        
-            elif isinstance(self.log_config,str) and self.log_config.endswith(".json"):
+
+            elif isinstance(self.log_config, str) and self.log_config.endswith(".json"):
                 with open(self.log_config) as config:
                     loaded_config = json.load(config)
                     logging.config.dictConfig(loaded_config)
 
-            else: # Riven cannot process log config
+            else:  # Riven cannot process log config
                 logger.error("Failed to load Log config please provide valid config using JSON/DICT")
 
         if self.log_level is not None:
-            if isinstance(self.log_level,str):
+            if isinstance(self.log_level, str):
                 log_level = LOG_LEVELS.get(self.log_level.lower())
                 if log_level is None:
                     logger.error("Invalid LOG LEVEL %s" % self.log_level)
@@ -180,7 +182,7 @@ class RivenConfig:
 
     def get_loop_factory(self) -> Callable[[], asyncio.AbstractEventLoop] | None:
         if self.loop in LOOP_FACTORIES:
-            loop_factory: Callable[...,Any]|None = import_with_string(LOOP_FACTORIES[self.loop])
+            loop_factory: Callable[..., Any] | None = import_with_string(LOOP_FACTORIES[self.loop])
         else:
             try:
                 return import_with_string(self.loop)
@@ -197,7 +199,7 @@ class RivenConfig:
         try:
             return import_with_string(self.app)
         except ImporterError as e:
-            logger.error("Error Loading %s Application %s" % (self.application_interface.upper(),e))
+            logger.error("Error Loading %s Application %s" % (self.application_interface.upper(), e))
             sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
     def load(self) -> None:
@@ -205,7 +207,7 @@ class RivenConfig:
             logger.error("Riven config already loaded")
             sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
-        if (not 1 <= self.port <= 65535):
+        if not 1 <= self.port <= 65535:
             logger.error("Invalid value for port %d" % self.port)
             sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
@@ -215,7 +217,7 @@ class RivenConfig:
 
         self.configure_headers()
 
-        if isinstance(self.application_interface,str):
+        if isinstance(self.application_interface, str):
             if self.application_interface.lower() not in get_args(APPLICATION_INTERFACE):
                 logger.error("Invalid Application Interface %s" % self.application_interface)
                 sys.exit(STARTUP_SHUTDOWN_FAILURE)
@@ -223,25 +225,26 @@ class RivenConfig:
             self.application_interface = self.application_interface.lower()
 
         try:
-            self.lifespan_class = import_with_string(LIFESPAN_CLASS[self.lifespan]) # get lifespan class
+            self.lifespan_class = import_with_string(LIFESPAN_CLASS[self.lifespan])  # get lifespan class
         except ImporterError as e:
             logger.error("Error Loading Lifespan class %s" % e)
             sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
         self.loaded_application = self.import_app()
 
-        try: # try calling application
+        try:  # try calling application
             self.loaded_application = self.loaded_application()
-        except TypeError as exc: # type error raised application is not loading through factory
+        except TypeError as exc:  # type error raised application is not loading through factory
             if self.app_factory:
-                logger.error("Error Loading %s app factory: %s" % (self.application_interface.upper(),exc))
+                logger.error("Error Loading %s app factory: %s" % (self.application_interface.upper(), exc))
                 sys.exit(STARTUP_SHUTDOWN_FAILURE)
         else:
-            if not self.app_factory: # factory detected but app factory settings not turned on
+            if not self.app_factory:  # factory detected but app factory settings not turned on
                 logger.error("App Factory Detected please turn on app factory with --factory")
                 sys.exit(STARTUP_SHUTDOWN_FAILURE)
 
         self.loaded = True
+
 
 class ImporterError(Exception):
     pass
@@ -253,7 +256,9 @@ def import_with_string(import_str: Any) -> Any:
 
     module_str, _, attrs_str = import_str.partition(":")
     if not module_str or not attrs_str:
-        message = 'Import string "{import_str}" invalid\nImport String must be in format "<module>:<attribute>"'
+        message = (
+            'Import string "{import_str}" invalid\nImport String must be in format "<module>:<attribute>"'
+        )
         raise ImporterError(message.format(import_str=import_str))
 
     try:

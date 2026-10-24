@@ -25,21 +25,22 @@ from .protocol_h3 import (
 )
 from .protocol_h3._protocol import send_goaway_and_disconnect
 
-type LifeSpan = LifeSpanOff|LifeSpanOn
+type LifeSpan = LifeSpanOff | LifeSpanOn
 
 HANDLED_SIGNALS = (
-    signal.SIGINT, # UNIX 2 : CTRL + C
-    signal.SIGTERM  # UNIX 15 : `kill <pid>`
+    signal.SIGINT,  # UNIX 2 : CTRL + C
+    signal.SIGTERM,  # UNIX 15 : `kill <pid>`
 )
 
 if sys.platform == "win32":
-    HANDLED_SIGNALS += (signal.SIGBREAK,) # windows signal 21 : CTRL + Break
+    HANDLED_SIGNALS += (signal.SIGBREAK,)  # windows signal 21 : CTRL + Break
 
-logger = logging.getLogger('riven')
+logger = logging.getLogger("riven")
 
 
 class RivenState:
     """Shared server state that is avaliable to all protocol instances"""
+
     def __init__(self) -> None:
         self.connections: set[RivenH3] = set()
 
@@ -54,35 +55,36 @@ class RivenState:
     def total_active_connections(self) -> int:
         return len(self.connections)
 
-    def add_connection(self,connection:RivenH3) -> None:
+    def add_connection(self, connection: RivenH3) -> None:
         """Add connection to server state"""
         self.connections.add(connection)
-    
-    def remove_connection(self,connection:RivenH3) -> None:
+
+    def remove_connection(self, connection: RivenH3) -> None:
         """Remove connection from server state"""
         self.connections.discard(connection)
 
-class RivenServer: # riven server and lifecycle manager
+
+class RivenServer:  # riven server and lifecycle manager
     def __init__(
         self,
-        config:RivenConfig,
+        config: RivenConfig,
     ):
         self.config = config
-        self.server_state:RivenState = RivenState()
+        self.server_state: RivenState = RivenState()
 
-        self.started:bool = False
-        self.should_exit:bool = False
-        self.force_exit:bool = False
+        self.started: bool = False
+        self.should_exit: bool = False
+        self.force_exit: bool = False
 
-        self._captured_signals:list[int] = []
+        self._captured_signals: list[int] = []
 
-        self.server:QuicServer|None = None
-        self.lifespan:LifeSpan|None = None
+        self.server: QuicServer | None = None
+        self.lifespan: LifeSpan | None = None
 
     def run(self) -> None:
         "Start server using configured loop factory"
-        return asyncio.run(self.serve(),loop_factory=self.config.get_loop_factory())
-    
+        return asyncio.run(self.serve(), loop_factory=self.config.get_loop_factory())
+
     async def serve(self) -> None:
         with self.intercept_signals():
             await self._serve()
@@ -97,8 +99,9 @@ class RivenServer: # riven server and lifecycle manager
         self.lifespan = config.lifespan_class(config)
 
         startup_message = "Started server process [%d]"
-        color_startup_message = "Started server process [" + colorize("%d",color=ANSIColor.CYAN,enabled=True) + "]"
-        logger.info(startup_message,processID, extra={"color_message": color_startup_message})
+        colourize_pid = colorize("%d", color=ANSIColor.CYAN, enabled=True)
+        color_startup_message = "Started server process [" + colourize_pid + "]"
+        logger.info(startup_message, processID, extra={"color_message": color_startup_message})
         await self.startup()
         if not self.should_exit:
             await self.main_loop()
@@ -106,9 +109,9 @@ class RivenServer: # riven server and lifecycle manager
         if self.started:
             await self.shutdown()
             shutdown_message = "Finished server process [%d]"
-            color_shutdown_message = "Finished server process [" + colorize("%d",color=ANSIColor.CYAN,enabled=True) + "]"
-            logger.info(shutdown_message,processID,extra={"color_message":color_shutdown_message})
-
+            colourize_pid = colorize("%d", color=ANSIColor.CYAN, enabled=True)
+            color_shutdown_message = "Finished server process [" + colourize_pid + "]"
+            logger.info(shutdown_message, processID, extra={"color_message": color_shutdown_message})
 
     async def startup(self):
         await self.lifespan.startup()
@@ -123,23 +126,16 @@ class RivenServer: # riven server and lifecycle manager
         )
 
         configuration.load_cert_chain(
-            certfile=config.ssl_certfile,
-            keyfile=config.ssl_keyfile,
-            password=config.ssl_keyfile_password
+            certfile=config.ssl_certfile, keyfile=config.ssl_keyfile, password=config.ssl_keyfile_password
         )
         try:
             self.server = await serve(
                 host=config.host,
                 port=config.port,
                 configuration=configuration,
-                create_protocol=lambda *args, **kwargs:
-                RivenH3(
-                    self.config,
-                    self.lifespan.state.copy(),
-                    self.server_state,
-                    *args,
-                    **kwargs
-                )
+                create_protocol=lambda *args, **kwargs: RivenH3(
+                    self.config, self.lifespan.state.copy(), self.server_state, *args, **kwargs
+                ),
             )
         except OSError as exc:
             logger.error(exc)
@@ -154,45 +150,43 @@ class RivenServer: # riven server and lifecycle manager
         config = self.config
         host = config.host
 
-        addr_format = "https://%s:%d" # https://host:port
+        addr_format = "https://%s:%d"  # https://host:port
 
-        if ":" in host: # Host address is IPV6 must be wrapped in brackets [host]
-            addr_format = "https://[%s]:%d" # https://[host]:port
+        if ":" in host:  # Host address is IPV6 must be wrapped in brackets [host]
+            addr_format = "https://[%s]:%d"  # https://[host]:port
 
         port = config.port
 
         msg = f"Riven running on {addr_format} (Press CTRL+C to exit)"
-        color_message = "Riven running on " + colorize(addr_format,ANSIColor.BRIGHT_BOLD_WHITE,enabled=True) + " (Press CTRL+C to exit)"
-        logger.info(msg,host,port,extra={'color_message':color_message})
+        colourize_address = colorize(addr_format, ANSIColor.BRIGHT_BOLD_WHITE, enabled=True)
+        color_message = "Riven running on " + colourize_address + " (Press CTRL+C to exit)"
+        logger.info(msg, host, port, extra={"color_message": color_message})
 
     @contextlib.contextmanager
-    def intercept_signals(self) -> Generator[None,None,None]:
+    def intercept_signals(self) -> Generator[None, None, None]:
 
         # Only Intercept on main thread
         if threading.current_thread() is not threading.main_thread():
-            yield 
+            yield
             return
 
         # apply custom hook for signals but store original
-        original_handlers = {
-            sig: signal.signal(sig,self.handle_exit)
-            for sig in HANDLED_SIGNALS
-        }
+        original_handlers = {sig: signal.signal(sig, self.handle_exit) for sig in HANDLED_SIGNALS}
         try:
             yield
         finally:
             # revert to original handlers
-            for sig,handler in original_handlers.items():
-                signal.signal(sig,handler)
+            for sig, handler in original_handlers.items():
+                signal.signal(sig, handler)
 
         # Re-raise absorbed signals to parent process
         for captured_signal in reversed(self._captured_signals):
             signal.raise_signal(captured_signal)
 
-    def handle_exit(self,sig:int,frame:FrameType|None) -> None:
+    def handle_exit(self, sig: int, frame: FrameType | None) -> None:
         # store captured signal
         self._captured_signals.append(sig)
-    
+
         # double break (ctrl+c) activate force crash state
         if self.should_exit and sig == signal.SIGINT:
             self.force_exit = True
@@ -204,12 +198,15 @@ class RivenServer: # riven server and lifecycle manager
     async def shutdown(self) -> None:
         logger.info("Shutting down")
 
-        # call protocol's own closing method using ConnectionTerminated event to schedule disconnect and change state for internal streams        
-        event = ConnectionTerminated(error_code=QuicErrorCode.NO_ERROR,reason_phrase="Server Shutting down",frame_type=None)
+        # change state of internal stream and schedule disconnect using ConnectionTerminated event
+        event = ConnectionTerminated(
+            error_code=QuicErrorCode.NO_ERROR, reason_phrase="Server Shutting down", frame_type=None
+        )
 
         for protocol in list(self.server_state.connections):
-            protocol._schedule_disconnect(event=event) # send 
-            send_goaway_and_disconnect(protocol=protocol) # send GOAWAY frame and close connection transport layer
+            protocol._schedule_disconnect(event=event)
+            # send GOAWAY frame and close connection transport layer
+            send_goaway_and_disconnect(protocol=protocol)
         await asyncio.sleep(0.1)
 
         try:
@@ -219,8 +216,7 @@ class RivenServer: # riven server and lifecycle manager
             )
         except asyncio.TimeoutError:
             logger.error(
-                "Cancel %s running tasks, timeout of graceful shutdown exceeded",
-                self.server_state.total_task
+                "Cancel %s running tasks, timeout of graceful shutdown exceeded", self.server_state.total_task
             )
 
             for task in self.server_state.application_tasks:

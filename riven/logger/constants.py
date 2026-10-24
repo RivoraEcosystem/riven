@@ -22,6 +22,4 @@ LIFECYCLE_LOGGER_NAME = f"{LOGGER_NAME}.lifecycle"
 # Formatter templates
 DEFAULT_LOG_FORMAT = "%(levelprefix)s %(message)s"
 
-DEFAULT_ACCESS_LOG_FORMAT = (
-    '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
-)
+DEFAULT_ACCESS_LOG_FORMAT = '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'

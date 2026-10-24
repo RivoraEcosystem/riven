@@ -30,11 +30,16 @@ class LifespanState(Enum):
     STOPPED = auto()
     FAILED = auto()
 
-type LifespanSendEvent = LifespanStartupCompleteEvent|LifespanStartupFailedEvent|LifespanShutdownCompleteEvent|LifespanShutdownFailedEvent
+
+type LifespanSendEvent = (
+    LifespanStartupCompleteEvent
+    | LifespanStartupFailedEvent
+    | LifespanShutdownCompleteEvent
+    | LifespanShutdownFailedEvent
+)
 
 
 class LifeSpanOn:
-
     def __init__(
         self,
         config: RivenConfig,
@@ -42,9 +47,8 @@ class LifeSpanOn:
 
         if not config.loaded:
             config.load()
-        
-        self.config = config
 
+        self.config = config
 
         self.queue: asyncio.Queue[RCPReceiveEvent] = asyncio.Queue()
         self.task: asyncio.Task[None] | None = None
@@ -54,14 +58,13 @@ class LifeSpanOn:
 
         self.startup_event = asyncio.Event()
         self.shutdown_event = asyncio.Event()
-        self.state:dict[str, Any] = {}
-
+        self.state: dict[str, Any] = {}
 
         self.should_exit = False
         self.error_occurred = False
         self.shutdown_failed = False
         self.startup_failed = False
-        self.logger = logging.getLogger('riven.lifecycle')
+        self.logger = logging.getLogger("riven.lifecycle")
 
     async def receive(self) -> RCPReceiveEvent | None:
         return await self._pop()
@@ -81,7 +84,7 @@ class LifeSpanOn:
 
         self._closed = True
         self.queue.shutdown(immediate=True)
-    
+
     async def _pop(self) -> RCPReceiveEvent | None:
         try:
             return await self.queue.get()
@@ -91,9 +94,9 @@ class LifeSpanOn:
     async def startup(self) -> None:
         self.logger.info("Waiting for application startup.")
         self._state = LifespanState.STARTING
-        event: LifespanStartupEvent = {"type":LifespanEventType.STARTUP}
+        event: LifespanStartupEvent = {"type": LifespanEventType.STARTUP}
         self.task = asyncio.get_event_loop().create_task(self.main())
-        await self._push(event)   
+        await self._push(event)
         await self.startup_event.wait()
 
         if self.startup_failed or self.error_occurred:
@@ -107,7 +110,7 @@ class LifeSpanOn:
             return
         self.logger.info("Waiting for application shutdown.")
         self._state = LifespanState.STOPPING
-        event: LifespanShutdownEvent = {"type":LifespanEventType.SHUTDOWN} 
+        event: LifespanShutdownEvent = {"type": LifespanEventType.SHUTDOWN}
         await self._push(event)
         await self.shutdown_event.wait()
 
@@ -120,22 +123,17 @@ class LifeSpanOn:
     @property
     def closed(self) -> bool:
         return self._closed
-    async def main(
-        self
-    ) -> None:
+
+    async def main(self) -> None:
 
         try:
             app = self.config.loaded_application
-            scope: LifespanScope = {
-                "type": ScopeType.LIFESPAN,
-                'state':self.state
-            }
+            scope: LifespanScope = {"type": ScopeType.LIFESPAN, "state": self.state}
 
             if self.config.application_interface == "asgi":
-                scope['asgi'] = APPLICATION_INTERFACE_SPEC['asgi']
+                scope["asgi"] = APPLICATION_INTERFACE_SPEC["asgi"]
             else:
-                scope['rcp'] = APPLICATION_INTERFACE_SPEC['rcp'] 
-            
+                scope["rcp"] = APPLICATION_INTERFACE_SPEC["rcp"]
 
             await app(scope, self.receive, self.send)
 
@@ -153,12 +151,10 @@ class LifeSpanOn:
             self.shutdown_event.set()
             await self.close()
 
-    async def send(self,event: LifespanSendEvent) -> None:
+    async def send(self, event: LifespanSendEvent) -> None:
 
         match event["type"]:
-
             case LifespanEventType.STARTUP_COMPLETE:
-
                 if self._state is not LifespanState.STARTING:
                     raise InvalidLifespanState(
                         self._state,
@@ -169,14 +165,13 @@ class LifeSpanOn:
                 self.startup_event.set()
 
             case LifespanEventType.STARTUP_FAILED:
-
                 if self._state is not LifespanState.STARTING:
                     raise InvalidLifespanState(
                         self._state,
                         event["type"],
                     )
 
-                if event.get('message'):
+                if event.get("message"):
                     self.logger.error(event["message"])
 
                 self._state = LifespanState.FAILED
@@ -185,7 +180,6 @@ class LifeSpanOn:
                 self.startup_event.set()
 
             case LifespanEventType.SHUTDOWN_COMPLETE:
-
                 if self._state is not LifespanState.STOPPING:
                     raise InvalidLifespanState(
                         self._state,
@@ -196,14 +190,13 @@ class LifeSpanOn:
                 self.shutdown_event.set()
 
             case LifespanEventType.SHUTDOWN_FAILED:
-
                 if self._state is not LifespanState.STOPPING:
                     raise InvalidLifespanState(
                         self._state,
                         event["type"],
                     )
 
-                if event.get('message'):
+                if event.get("message"):
                     self.logger.error(event["message"])
 
                 self._state = LifespanState.FAILED

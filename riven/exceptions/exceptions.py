@@ -92,9 +92,11 @@ class InvalidPath(RivenException):
 
         super().__init__(message)
 
+
 class InvalidStream(RivenException):
     """Raised when an invalid object is stored as a stream context."""
-    def __init__(self, context:Any,expected:type):
+
+    def __init__(self, context: Any, expected: type):
         super().__init__(f"Unexpected Stream Type expected {expected.__name__}, got {type(context).__name__}")
 
 
@@ -112,9 +114,7 @@ class InvalidLifespanState(RivenException):
         state_name = getattr(state, "name", str(state))
         event_name = getattr(event, "name", str(event))
 
-        super().__init__(
-            f"Invalid lifespan transition: state={state_name}, event={event_name}"
-        )
+        super().__init__(f"Invalid lifespan transition: state={state_name}, event={event_name}")
 
 
 class LifespanAlreadyCompleted(RivenException):
@@ -132,6 +132,7 @@ class LifespanNotStarted(RivenException):
         self.phase = phase
         super().__init__(f"Lifespan {phase} has not been started.")
 
+
 class InvalidEventField(RivenException):
     """Raised when an event field has an invalid type."""
 
@@ -142,10 +143,9 @@ class InvalidEventField(RivenException):
         expected: type,
     ) -> None:
         super().__init__(
-            f"Invalid field {field!r} in event.\n"
-            f"Expected: {expected.__name__}\n"
-            f"Got: {got.__name__}"
+            f"Invalid field {field!r} in event.\nExpected: {expected.__name__}\nGot: {got.__name__}"
         )
+
 
 class InvalidStatusCode(RivenException):
     """Raised when an event sends invalid http status code"""
@@ -153,27 +153,33 @@ class InvalidStatusCode(RivenException):
     def __init__(self, *args):
         super().__init__(*args)
 
+
 class ClientDisconnected(RivenException):
     pass
+
 
 class MalformedRequest(RivenException):
     pass
 
+
 class UnsupportedMethod(RivenException):
     "Valid HTTP method not supported by Riven"
-    def __init__(
-            self,
-            method:str):
+
+    def __init__(self, method: str):
         super().__init__(f"Unsupported HTTP Method {method}")
+
 
 class H3MalformedMessage(RivenException):
     """Raised when Request Message contains Invalid headers according to HTTP3 schematic"""
-    
+
+
 class H3MalformedResponseMessage(RivenException):
     """Raised when Response Message contains Invalid headers according to HTTP3 schematic"""
 
+
 class WebTransportConnectStreamEnded(RivenException):
     """Raised When WebTransport CONNECT stream is set to end before establishing the Session"""
+
 
 class CapsuleError(RivenException):
     """Raised When WebTransport Capsules have error during parsing or validation"""
