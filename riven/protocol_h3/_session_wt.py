@@ -16,7 +16,7 @@ from rcp import (
 )
 
 if TYPE_CHECKING:
-    from ..protocol_h3._protocol import RivenH3
+    from ._protocol import RivenH3
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")

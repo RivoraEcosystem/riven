@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.buffer import Buffer
-from aioquic.h3.connection import H3_ALPN, ErrorCode, FrameType, H3Connection, Setting, SettingsError
+from aioquic.h3.connection import H3_ALPN, ErrorCode, FrameType
 from aioquic.h3.events import (
     DataReceived,
     HeadersReceived,
@@ -29,8 +29,8 @@ from rcp import (
 
 from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
 from ..exceptions import exceptions
-from ..protocol_webtransport_h3._protocol_wt import WebTransportSettings
-from ..protocol_webtransport_h3._session_wt import WebTransportSessionProtocol
+from .h3_protocol import H3Protocol
+from ._session_wt import WebTransportSessionProtocol
 from ._stream_utils import ConnectionInfo, HTTP3Stream
 
 if TYPE_CHECKING:
@@ -488,62 +488,3 @@ class RivenH3(QuicConnectionProtocol):
 
     def is_lowercase_header(name: bytes) -> bool:  # return True only if there is no uppercase character
         return not any(65 <= c <= 90 for c in name)
-
-
-class H3Protocol(H3Connection):
-    """
-    A High-level HTTP/3 wrapper for aioquic's H3Connection.
-    """
-
-    def __init__(self, quic, enable_webtransport=False):
-        super().__init__(quic, enable_webtransport)
-
-    def _get_local_settings(self) -> dict[int, int]:
-        """
-        Override internal method to get local settings updated to latest draft version of webtransport
-        """
-        settings: dict[int, int] = {
-            Setting.QPACK_MAX_TABLE_CAPACITY: self._max_table_capacity,
-            Setting.QPACK_BLOCKED_STREAMS: self._blocked_streams,
-            WebTransportSettings.SETTINGS_ENABLE_CONNECT_PROTOCOL: 1,
-            Setting.DUMMY: 1,
-        }
-        if self._enable_webtransport:
-            settings[WebTransportSettings.SETTINGS_H3_DATAGRAM] = 1
-            settings[WebTransportSettings.SETTINGS_WT_ENABLED] = 1
-            settings[WebTransportSettings.SETTINGS_WT_INITIAL_MAX_DATA] = 1 * 1024 * 1024
-            settings[WebTransportSettings.SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI] = 5
-            settings[WebTransportSettings.SETTINGS_WT_INITIAL_MAX_STREAMS_UNI] = 5
-        return settings
-
-    def _validate_settings(self, settings: dict[int, int]) -> None:
-        """
-        Override internal method to validate remote settings against latest draft version of webtransport
-        """
-
-        for setting in [
-            WebTransportSettings.SETTINGS_ENABLE_CONNECT_PROTOCOL,
-            WebTransportSettings.SETTINGS_WT_ENABLED,
-            WebTransportSettings.SETTINGS_H3_DATAGRAM,
-        ]:
-            if setting in settings and settings[setting] not in (0, 1):
-                raise SettingsError(f"{setting.name} setting must be 0 or 1")
-
-        if (
-            settings.get(WebTransportSettings.SETTINGS_H3_DATAGRAM) == 1
-            and self._quic._remote_max_datagram_frame_size is None
-        ):
-            raise SettingsError("SETTINGS_H3_DATAGRAM requires max_datagram_frame_size transport parameter")
-
-        if (
-            settings.get(WebTransportSettings.SETTINGS_WT_ENABLED) == 1
-            and settings.get(WebTransportSettings.SETTINGS_H3_DATAGRAM) != 1
-        ):
-            raise SettingsError("SETTINGS_WT_ENABLED requires SETTINGS_H3_DATAGRAM")
-
-        if (
-            settings.get(WebTransportSettings.SETTINGS_WT_ENABLED) == 1
-            and settings.get(WebTransportSettings.SETTINGS_H3_DATAGRAM) == 1
-            and settings.get(WebTransportSettings.SETTINGS_ENABLE_CONNECT_PROTOCOL) != 1
-        ):
-            raise SettingsError("SETTINGS_WT_ENABLED requires SETTINGS_ENABLE_CONNECT_PROTOCOL")
