@@ -4,17 +4,16 @@ Logging formatters used by Riven.
 
 from __future__ import annotations
 
-from copy import copy
 import logging
+from copy import copy
 
 from .colors import (
+    ANSIColor,
     colorize,
     level_color,
-    method_color,
     status_color,
-    supports_color,
     status_phrase,
-    ANSIColor
+    supports_color,
 )
 
 

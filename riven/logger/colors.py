@@ -7,8 +7,8 @@ from __future__ import annotations
 import logging
 import sys
 from enum import StrEnum
-from typing import TextIO
 from http import HTTPStatus
+from typing import TextIO
 
 __all__ = (
     "ANSIColor",

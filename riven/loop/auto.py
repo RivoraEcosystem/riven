@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import asyncio
-from collections.abc import Callable
 import sys
+from collections.abc import Callable
+
 
 def auto_loop_factory() -> Callable[[],asyncio.AbstractEventLoop]:
 

@@ -1,42 +1,38 @@
 from __future__ import annotations
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING, Any
+
 from aioquic.asyncio.protocol import QuicConnectionProtocol
-from aioquic.quic.events import (
-    ProtocolNegotiated,
-    ConnectionTerminated,
-    StreamReset,
-    StopSendingReceived,
-)
-from aioquic.h3.events import (
-    HeadersReceived,
-    DataReceived,
-)
-from aioquic.h3.connection import (
-    H3_ALPN,
-    H3Connection,
-    ErrorCode,
-    FrameType,
-    Setting,
-    SettingsError
-)
 from aioquic.buffer import Buffer
+from aioquic.h3.connection import H3_ALPN, ErrorCode, FrameType, H3Connection, Setting, SettingsError
+from aioquic.h3.events import (
+    DataReceived,
+    HeadersReceived,
+)
+from aioquic.quic.events import (
+    ConnectionTerminated,
+    ProtocolNegotiated,
+    StopSendingReceived,
+    StreamReset,
+)
 from rcp import (
+    H3_FORBIDDEN_HEADERS,
+    HTTPScheme,
     HTTPScope,
-    WebTransportScope,
-    ScopeType,
     HTTPVersions,
     RequestMethod,
-    HTTPScheme,
-    H3_FORBIDDEN_HEADERS,
+    ScopeType,
+    WebTransportScope,
 )
-from ._stream_utils import HTTP3Stream , ConnectionInfo
-import asyncio
+
+from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
 from ..exceptions import exceptions
-from typing import Any
-import logging
-from typing import TYPE_CHECKING
-from .._config import APPLICATION_INTERFACE_SPEC , RivenConfig
-from ..protocol_webtransport_h3._session_wt import WebTransportSessionProtocol
 from ..protocol_webtransport_h3._protocol_wt import WebTransportSettings
+from ..protocol_webtransport_h3._session_wt import WebTransportSessionProtocol
+from ._stream_utils import ConnectionInfo, HTTP3Stream
+
 if TYPE_CHECKING:
     from ..server import RivenState
 
@@ -240,7 +236,7 @@ class RivenH3(QuicConnectionProtocol):
                 else:
 
                     if name == b"te" and not value.lower() == b"trailers":
-                        raise exceptions.H3MalformedMessage(f"Invalid value for header: 'te'")
+                        raise exceptions.H3MalformedMessage("Invalid value for header: 'te'")
 
                     if name in H3_FORBIDDEN_HEADERS:
                         raise exceptions.H3MalformedMessage(f"Forbidden headers in request: {name!r}")

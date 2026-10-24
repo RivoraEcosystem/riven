@@ -10,12 +10,12 @@ from __future__ import annotations
 from typing import Any
 
 from .constants import (
-    LOGGER_NAME,
     ACCESS_LOGGER_NAME,
-    PROTOCOL_LOGGER_NAME,
-    LIFECYCLE_LOGGER_NAME,
-    DEFAULT_LOG_FORMAT,
     DEFAULT_ACCESS_LOG_FORMAT,
+    DEFAULT_LOG_FORMAT,
+    LIFECYCLE_LOGGER_NAME,
+    LOGGER_NAME,
+    PROTOCOL_LOGGER_NAME,
 )
 
 LOGGING_CONFIG: dict[str, Any] = {

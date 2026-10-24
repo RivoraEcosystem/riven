@@ -1,31 +1,29 @@
+import asyncio
+import contextlib
+import logging
+import os
+import signal
+import sys
+import threading
+from types import FrameType
+from typing import Generator
+
+from aioquic.asyncio.server import QuicServer, serve
+from aioquic.h3.connection import H3_ALPN
+from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.events import ConnectionTerminated
+from aioquic.quic.packet import QuicErrorCode
+
+from ._config import STARTUP_SHUTDOWN_FAILURE, RivenConfig
+from .lifespan import (
+    LifeSpanOff,
+    LifeSpanOn,
+)
+from .logger.colors import ANSIColor, colorize
 from .protocol_h3 import (
     RivenH3,
 )
 from .protocol_h3._protocol import send_goaway_and_disconnect
-from aioquic.asyncio.server import serve , QuicServer
-from aioquic.quic.configuration import QuicConfiguration
-from aioquic.h3.connection import H3_ALPN
-from aioquic.quic.events import ConnectionTerminated
-from aioquic.quic.packet import QuicErrorCode
-from .lifespan import (
-    LifeSpanOn,
-    LifeSpanOff,
-)
-from .logger.colors import colorize , ANSIColor
-import os
-import asyncio
-from ._config import (
-    RivenConfig,
-    STARTUP_SHUTDOWN_FAILURE
-    )
-from typing import Generator
-from types import FrameType
-
-import signal
-import threading
-import sys
-import logging
-import contextlib
 
 type LifeSpan = LifeSpanOff|LifeSpanOn
 

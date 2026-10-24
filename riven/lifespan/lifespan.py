@@ -1,28 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from enum import Enum, auto
 from typing import Any
 
 from rcp import (
-    LifespanScope,
-    RCPReceiveEvent,
     LifespanEventType,
-    LifespanStartupEvent,
-    LifespanShutdownEvent,
-    ScopeType,
-    LifespanStartupCompleteEvent,
-    LifespanStartupFailedEvent,
+    LifespanScope,
     LifespanShutdownCompleteEvent,
-    LifespanShutdownFailedEvent
+    LifespanShutdownEvent,
+    LifespanShutdownFailedEvent,
+    LifespanStartupCompleteEvent,
+    LifespanStartupEvent,
+    LifespanStartupFailedEvent,
+    RCPReceiveEvent,
+    ScopeType,
 )
 
-from ..exceptions.exceptions import(
-    InvalidLifespanState,
-    InvalidEvent
-)
-import logging
-from .._config import RivenConfig , APPLICATION_INTERFACE_SPEC
+from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
+from ..exceptions.exceptions import InvalidEvent, InvalidLifespanState
+
 
 class LifespanState(Enum):
     INITIAL = auto()

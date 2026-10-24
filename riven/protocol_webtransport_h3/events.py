@@ -1,6 +1,8 @@
-from aioquic.h3 import *
 from dataclasses import dataclass
+
+from aioquic.h3 import *
 from rcp.events import Headers
+
 
 @dataclass(slots=True,frozen=True)
 class WebTransportSessionStart:

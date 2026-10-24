@@ -1,28 +1,31 @@
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from rcp import (
-    HTTPScope,
-    HTTPRequestEvent,
+    H3_FORBIDDEN_HEADERS,
     HTTPConnectionEventType,
     HTTPDisconnectEvent,
+    HTTPRequestEvent,
+    HTTPResponseBodyEvent,
     HTTPResponseEventType,
     HTTPResponseStartEvent,
-    HTTPResponseBodyEvent,
+    HTTPScope,
     RCPApplication,
     RCPReceiveEvent,
     RCPSendEvent,
-    H3_FORBIDDEN_HEADERS
 )
 
 from ._connection_utils import ConnectionInfo
-from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from ._protocol import RivenH3
 import logging
-from aioquic.h3.connection import (
-    ErrorCode
-)
-from ..exceptions import exceptions
 from collections.abc import Iterable
+
+from aioquic.h3.connection import ErrorCode
+
+from ..exceptions import exceptions
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
@@ -249,10 +252,10 @@ class HTTP3Stream:
             return
 
         if self._response_complete: # response already completed
-            raise RuntimeError(f"RCP Violation - Unexpected RCP event response already completed.")
+            raise RuntimeError("RCP Violation - Unexpected RCP event response already completed.")
 
         if self._closed:
-            raise RuntimeError(f"RCP Violation - Unexpected RCP Event stream closed.")
+            raise RuntimeError("RCP Violation - Unexpected RCP Event stream closed.")
 
         if event["type"] == HTTPResponseEventType.START:
 

@@ -8,36 +8,13 @@ Reference: [draft-ietf-webtrans-http3-16](https://datatracker.ietf.org/doc/html/
 
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from rcp import (
-    WEBTRANSPORT_EXTENSION,
-    RCPApplication,
-    WebtransportSendEvent,
-    WebtransportReceiveEvent,
-    WebTransportSessionAccept,
-    WebTransportSessionClose,
-    WebTransportSessionReject,
-    WebTransportSessionDisconnect,
-    WebTransportClientUnidirectionalStreamStarted,
-    WebTransportClientBidirectionalStreamStarted,
-    WebTransportDatagramReceived,
-    WebTransportConnectionEventType,
-    WebTransportUnidirectionalStreamEventType,
-    WebTransportBidirectionalStreamEventType,
-    WebTransportDatagramEventType,
-    Reader,
-    Writer
-)
-from ..exceptions import exceptions
 
-from asyncio import Queue , QueueShutDown
 import logging
-import asyncio
-from enum import IntEnum , Enum
-from aioquic._buffer import Buffer, BufferReadError
+from enum import IntEnum
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..protocol_h3._protocol import RivenH3
+    pass
 
 
 class FlowControlCapsuleType(IntEnum):

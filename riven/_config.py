@@ -1,14 +1,16 @@
-from .logger import LOGGING_CONFIG
-from typing import Any , Literal , get_args
-from rcp import RCPApplication , H3_FORBIDDEN_HEADERS
-import os
-import logging.config
-import logging
-import json
-import importlib
-import sys
 import asyncio
+import importlib
+import json
+import logging
+import logging.config
+import os
+import sys
 from collections.abc import Callable
+from typing import Any, Literal, get_args
+
+from rcp import H3_FORBIDDEN_HEADERS, RCPApplication
+
+from .logger import LOGGING_CONFIG
 
 LOG_LEVELS: dict[str, int] = {
     "critical": logging.CRITICAL,
@@ -214,7 +216,7 @@ class RivenConfig:
         self.configure_headers()
 
         if isinstance(self.application_interface,str):
-            if not self.application_interface.lower() in get_args(APPLICATION_INTERFACE):
+            if self.application_interface.lower() not in get_args(APPLICATION_INTERFACE):
                 logger.error("Invalid Application Interface %s" % self.application_interface)
                 sys.exit(STARTUP_SHUTDOWN_FAILURE)
 

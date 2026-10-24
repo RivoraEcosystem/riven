@@ -1,21 +1,23 @@
-from riven._config import (
-    LOG_LEVELS,
-    APPLICATION_INTERFACE_SPEC,
-    LIFESPAN_CLASS,
-    LOOP_FACTORIES,
-    LOOP_FACTORY_TYPE,
-    APPLICATION_INTERFACE,
-    RivenConfig
-)
-import riven
-from riven.server import RivenServer
-from rcp import RCPApplication
-import platform
 import logging
-import click
+import os
+import platform
 from collections.abc import Callable
 from typing import Any
-import os
+
+import click
+from rcp import RCPApplication
+
+import riven
+from riven._config import (
+    APPLICATION_INTERFACE,
+    APPLICATION_INTERFACE_SPEC,
+    LIFESPAN_CLASS,
+    LOG_LEVELS,
+    LOOP_FACTORIES,
+    LOOP_FACTORY_TYPE,
+    RivenConfig,
+)
+from riven.server import RivenServer
 
 LOG_CHOICES = click.Choice(list(LOG_LEVELS.keys()))
 APPLICATION_INTERFACE_CHOICES = click.Choice(list(APPLICATION_INTERFACE_SPEC.keys()))
