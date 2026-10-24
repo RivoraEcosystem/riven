@@ -39,7 +39,7 @@ logger = logging.getLogger("riven")
 
 
 class RivenState:
-    """Shared server state that is avaliable to all protocol instances"""
+    """Shared server state that is available to all protocol instances"""
 
     def __init__(self) -> None:
         self.connections: set[RivenH3] = set()

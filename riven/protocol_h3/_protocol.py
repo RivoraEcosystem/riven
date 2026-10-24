@@ -257,7 +257,7 @@ class RivenH3(QuicConnectionProtocol):
                         host = value
 
                     headers.append((name, value))
-                    normal_header = True  # normal headers started cant accept pseudo headers now
+                    normal_header = True  # normal headers started can't accept pseudo headers now
 
             if method is None:
                 raise exceptions.MethodNotAllowed()
@@ -518,7 +518,7 @@ class H3Protocol(H3Connection):
 
     def _validate_settings(self, settings: dict[int, int]) -> None:
         """
-        Override internal method to validate remote settings agaist latest draft version of webtransport
+        Override internal method to validate remote settings against latest draft version of webtransport
         """
 
         for setting in [
