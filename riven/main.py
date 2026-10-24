@@ -7,7 +7,6 @@ from typing import Any
 import click
 from rcp import RCPApplication
 
-import riven
 from riven._config import (
     APPLICATION_INTERFACE,
     APPLICATION_INTERFACE_SPEC,
@@ -18,6 +17,8 @@ from riven._config import (
     RivenConfig,
 )
 from riven.server import RivenServer
+
+from ._version import __version__
 
 LOG_CHOICES = click.Choice(list(LOG_LEVELS.keys()))
 APPLICATION_INTERFACE_CHOICES = click.Choice(list(APPLICATION_INTERFACE_SPEC.keys()))
@@ -34,7 +35,7 @@ def echo_version(ctx: click.Context, param: click.Parameter, value: bool) -> Non
 
     click.echo(
         "Running Riven {version} on system {system}".format(
-            version=riven.__version__,
+            version=__version__,
             system=platform.system(),
         )
     )
