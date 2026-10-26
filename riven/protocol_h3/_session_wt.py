@@ -23,7 +23,7 @@ protocol_logger = logging.getLogger("riven.protocol")
 
 
 class WebTransportSessionProtocol:
-    """ "
+    """
     High level wrapper for WebTransport over HTTP/3 to handle WebTransport specific events and streams.
     """
 

@@ -8,20 +8,39 @@ Reference: [draft-ietf-webtrans-http3-16](https://datatracker.ietf.org/doc/html/
 
 from __future__ import annotations
 
-from aioquic._buffer import Buffer , BufferReadError
-from aioquic.h3.connection import ErrorCode , H3Connection , Setting , SettingsError
-from .capsules import WT_CLOSE_SESSION
-from ..exceptions.exceptions import CapsuleError
 import logging
 from enum import IntEnum
 from typing import TYPE_CHECKING
+
+from aioquic.buffer import Buffer, BufferReadError
+from aioquic.h3.connection import ErrorCode, H3Connection, Setting, SettingsError  # noqa: F401
+
+from ..exceptions.exceptions import CapsuleError
+from .capsules import (
+    WT_CLOSE_SESSION,
+    WT_DATA_BLOCKED,
+    WT_DRAIN_SESSION,
+    WT_MAX_DATA,
+    WT_MAX_STREAMS_BIDI,
+    WT_MAX_STREAMS_UNI,
+    WT_STREAMS_BLOCKED_BIDI,
+    WT_STREAMS_BLOCKED_UNI,
+)
 
 if TYPE_CHECKING:
     from ._session_wt import WebTransportSessionProtocol
 
 type Capsule = (
     WT_CLOSE_SESSION
+    | WT_DRAIN_SESSION
+    | WT_MAX_STREAMS_UNI
+    | WT_MAX_STREAMS_BIDI
+    | WT_STREAMS_BLOCKED_UNI
+    | WT_STREAMS_BLOCKED_BIDI
+    | WT_MAX_DATA
+    | WT_DATA_BLOCKED
 )
+
 
 class FlowControlCapsuleType(IntEnum):
     """A Webtransport Session can send Flow control capsules over a
@@ -53,11 +72,11 @@ class WebTransportSettings(IntEnum):
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
 
+
 class WebTransportProtocol:
     def __init__(self):
         pass
 
-    
 
 class H3Protocol(H3Connection):
     """
@@ -117,55 +136,166 @@ class H3Protocol(H3Connection):
         ):
             raise SettingsError("SETTINGS_WT_ENABLED requires SETTINGS_ENABLE_CONNECT_PROTOCOL")
 
-    def parse_webtransport_capsule(self,session:WebTransportSessionProtocol) -> list[Capsule]:
-    
+    def parse_webtransport_capsule(self, session: WebTransportSessionProtocol) -> list[Capsule]:
+
         buf = Buffer(data=session._buffer)
-        capsules:list[Capsule] = []
+        capsules: list[Capsule] = []
         consumed = 0
- 
+
         while not buf.eof():
- 
             try:
                 capsule_type = buf.pull_uint_var()
                 capsule_length = buf.pull_uint_var()
             except BufferReadError:
                 # Incomplete capsule wait for more data
                 break
- 
+
             if buf.capacity - buf.tell() < capsule_length:
                 # Incomplete capsule payload wait for more data
                 break
- 
+
+            payload = buf.pull_bytes(capsule_length)  # pull payload
+            payload_buf = Buffer(data=payload)
+
             if capsule_type == FlowControlCapsuleType.WT_CLOSE_SESSION:
-                # A WT_CLOSE_SESSION can contain 32 bit application error code and 1024 byte long error message only
+                # WT_CLOSE_SESSION can contain 32 bit error code and 1024 byte long error message only
                 # https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#name-session-termination
                 if capsule_length < 4 or capsule_length > 1028:
-                    raise CapsuleError("Invalid WT_CLOSE_SESSION length")
- 
-                error_code = buf.pull_uint32()
-                message = buf.pull_bytes((capsule_length-4))
+                    raise CapsuleError("Invalid length for WT_CLOSE_SESSION")
+
+                error_code = payload_buf.pull_uint32()
+                message = payload_buf.pull_bytes((capsule_length - 4))
                 try:
-                    error_message = message.decode("utf-8",errors='strict')
+                    error_message = message.decode("utf-8", errors="strict")
                 except UnicodeDecodeError as exc:
                     raise CapsuleError(
                         "Invalid UTF-8 Application Error Message for WT_CLOSE_SESSION"
                     ) from exc
- 
+
+                if not payload_buf.eof():
+                    raise CapsuleError("Invalid Trailing bytes in WT_CLOSE_SESSION")
+
                 capsules.append(
                     WT_CLOSE_SESSION(
                         type=FlowControlCapsuleType.WT_CLOSE_SESSION,
                         length=capsule_length,
-                        Application_Error_Code=error_code,
-                        Application_Error_Message=error_message
+                        application_Error_Code=error_code,
+                        application_Error_Message=error_message,
                     )
                 )
-            else:
-                # Skip unknown or unhandled capsule types.
-                buf.pull_bytes(capsule_length)
- 
+
+            elif capsule_type == FlowControlCapsuleType.WT_DRAIN_SESSION:
+                if capsule_length > 0:
+                    raise CapsuleError("Invalid length for WT_DRAIN_SESSION")
+
+                capsules.append(
+                    WT_DRAIN_SESSION(type=FlowControlCapsuleType.WT_DRAIN_SESSION, length=capsule_length)
+                )
+
+            elif capsule_type == FlowControlCapsuleType.WT_MAX_STREAMS_UNI:
+                max_uni_stream = payload_buf.pull_uint_var()
+
+                if max_uni_stream > (1 << 60):
+                    raise CapsuleError("Invalid value for maximum streams in WT_MAX_STREAMS_UNI")
+
+                if not payload_buf.eof():
+                    raise CapsuleError("Invalid Trailing bytes in WT_MAX_STREAMS_UNI")
+
+                capsules.append(
+                    WT_MAX_STREAMS_UNI(
+                        type=FlowControlCapsuleType.WT_MAX_STREAMS_UNI,
+                        length=capsule_length,
+                        maximum_streams=max_uni_stream,
+                    )
+                )
+
+            elif capsule_type == FlowControlCapsuleType.WT_MAX_STREAMS_BIDI:
+                max_bidi_stream = payload_buf.pull_uint_var()
+
+                if max_bidi_stream > (1 << 60):
+                    raise CapsuleError("Invalid value for maximum streams in WT_MAX_STREAMS_BIDI")
+
+                if not payload_buf.eof():
+                    raise CapsuleError("Invalid Trailing bytes in WT_MAX_STREAMS_BIDI")
+
+                capsules.append(
+                    WT_MAX_STREAMS_BIDI(
+                        type=FlowControlCapsuleType.WT_MAX_STREAMS_BIDI,
+                        length=capsule_length,
+                        maximum_streams=max_bidi_stream,
+                    )
+                )
+
+            elif capsule_type == FlowControlCapsuleType.WT_STREAMS_BLOCKED_UNI:
+                uni_stream_limit = payload_buf.pull_uint_var()
+
+                if uni_stream_limit > (1 << 60):
+                    raise CapsuleError("Invalid value for maximum streams in WT_STREAMS_BLOCKED_UNI")
+
+                if not payload_buf.eof():
+                    raise CapsuleError("Invalid Trailing bytes in WT_STREAMS_BLOCKED_UNI")
+
+                capsules.append(
+                    WT_STREAMS_BLOCKED_UNI(
+                        type=FlowControlCapsuleType.WT_STREAMS_BLOCKED_UNI,
+                        length=capsule_length,
+                        maximum_streams=uni_stream_limit,
+                    )
+                )
+
+            elif capsule_type == FlowControlCapsuleType.WT_STREAMS_BLOCKED_BIDI:
+                bidi_stream_limit = payload_buf.pull_uint_var()
+
+                if bidi_stream_limit > (1 << 60):
+                    raise CapsuleError("Invalid value for maximum streams in WT_STREAMS_BLOCKED_BIDI")
+
+                if not payload_buf.eof():
+                    raise CapsuleError("Invalid Trailing bytes in WT_STREAMS_BLOCKED_BIDI")
+
+                capsules.append(
+                    WT_STREAMS_BLOCKED_BIDI(
+                        type=FlowControlCapsuleType.WT_STREAMS_BLOCKED_BIDI,
+                        length=capsule_length,
+                        maximum_streams=bidi_stream_limit,
+                    )
+                )
+
+            elif capsule_type == FlowControlCapsuleType.WT_MAX_DATA:
+                max_data = payload_buf.pull_uint_var()
+
+                # check if max_data field is exceeding max variable-length integer
+                if max_data > ((1 << 62) - 1):
+                    raise CapsuleError("Invalid value for maximum data in WT_MAX_DATA")
+
+                if not payload_buf.eof():
+                    raise CapsuleError("Invalid Trailing bytes in WT_MAX_DATA")
+
+                capsules.append(
+                    WT_MAX_DATA(
+                        type=FlowControlCapsuleType.WT_MAX_DATA, length=capsule_length, maximum_data=max_data
+                    )
+                )
+
+            elif capsule_type == FlowControlCapsuleType.WT_DATA_BLOCKED:
+                data_limit = payload_buf.pull_uint_var()
+
+                if data_limit > ((1 << 62) - 1):
+                    raise CapsuleError("Invalid value for maximum data in WT_DATA_BLOCKED")
+
+                if not payload_buf.eof():
+                    raise CapsuleError("Invalid Trailing bytes in WT_DATA_BLOCKED")
+
+                capsules.append(
+                    WT_DATA_BLOCKED(
+                        type=FlowControlCapsuleType.WT_DATA_BLOCKED,
+                        length=capsule_length,
+                        maximum_data=data_limit,
+                    )
+                )
+
             # capsule fully parsed mark consumed bytes
             consumed = buf.tell()
- 
+
         # remove processed data from buffer
         session._buffer = session._buffer[consumed:]
         return capsules
