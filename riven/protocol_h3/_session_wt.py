@@ -33,12 +33,28 @@ protocol_logger = logging.getLogger("riven.protocol")
 
 class WebTransportSessionProtocol:
     """
-    High level wrapper for WebTransport over HTTP/3 to handle WebTransport specific events and streams.
+    WebTransport Session Protocol to Manage WebTransport Session streams and Datagrams using H3Protocol.
     """
 
     _CLOSED = 1 << 0
     _STREAM_RESET = 1 << 1
     _STREAM_ENDED = 1 << 2
+
+    __slots__ = (
+        "_protocol",
+        "_quic",
+        "_http",
+        "config",
+        "scope",
+        "server_state",
+        "_queue",
+        "_buffer",
+        "_flags",
+        "_stream_ids",
+        "disconnected",
+        "disconnect_event",
+        "session_id",
+    )
 
     def __init__(self, protocol: RivenH3, scope: dict):
 
