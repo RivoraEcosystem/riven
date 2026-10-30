@@ -218,7 +218,8 @@ class HTTP3Stream:
     async def handle_close(self):
         """Close StreamContext and remove from active stream"""
         self.close()
-        self._protocol._active_streams.pop(self.stream_id, None)  # remove stream instance from memory
+        # remove stream instance from stream mapping
+        self._protocol._active_streams_sessions.pop(self.stream_id, None)
 
     async def send_500_response(self) -> None:  # send 500 Internal Server Error response to client
         error_response_start: HTTPResponseStartEvent = {

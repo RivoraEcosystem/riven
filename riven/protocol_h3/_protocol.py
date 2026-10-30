@@ -94,7 +94,7 @@ class RivenH3(QuicConnectionProtocol):
         self.config = config
         self.app_state = app_state
         self.server_state = server_state
-        self._active_streams_sessions: dict[int, HTTP3Stream] = dict()
+        self._active_streams_sessions: dict[int, HTTP3Stream | WebTransportSessionProtocol] = dict()
         self._http = None
         self._disconnected = False
         self.server_state.add_connection(self)  # add connection to server state
@@ -126,35 +126,59 @@ class RivenH3(QuicConnectionProtocol):
                 elif isinstance(http_event, DataReceived):
                     stream = self._active_streams_sessions.get(http_event.stream_id)
 
-                    if not isinstance(stream, HTTP3Stream):
+                    if isinstance(stream, HTTP3Stream):
+                        if stream._closed:
+                            self._quic.reset_stream(
+                                stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
+                            )
+                            self.transmit()
+                            stream._stream_reset = True
+                            protocol_logger.error(
+                                "Failed to handle HTTP/3 DataReceived event for stream %d - "
+                                "Stream Closed By Application",
+                                http_event.stream_id,
+                            )
+                            return
+
+                        if http_event.stream_ended:
+                            stream.more_body = False
+                            stream._request_complete = True
+
+                        stream._body += http_event.data  # add event data to stream's body
+
+                    elif isinstance(stream, WebTransportSessionProtocol):
+                        if stream._closed:
+                            self._quic.reset_stream(
+                                stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
+                            )
+                            self.transmit()
+                            stream._stream_reset = True
+                            protocol_logger.error(
+                                "Failed to handle HTTP/3 DataReceived event for Webtransport CONNECT "
+                                "stream %d - Stream Closed By Application",
+                                http_event.stream_id,
+                            )
+                            return
+
+                        if http_event.stream_ended:
+                            stream._stream_ended = True
+
+                        stream.handle_webtransport_event(event=http_event)
+
+                    else:  # Unknown stream type
                         self._quic.reset_stream(
                             stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
                         )
                         self.transmit()
                         protocol_logger.error(
-                            "Failed to handle HTTP/3 DataReceived event for stream %d - Invalid Stream",
+                            "Failed to handle HTTP/3 DataReceived event for stream %d "
+                            "- Invalid Stream Type %s",
                             http_event.stream_id,
+                            type(stream).__name__ if stream is not None else "None",
                         )
-                        return
-
-                    if stream._closed:
-                        self._quic.reset_stream(
-                            stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
-                        )
-                        self.transmit()
-                        stream._stream_reset = True
-                        protocol_logger.error(
-                            "Failed to handle HTTP/3 DataReceived event for stream %d - "
-                            "Stream Closed By Application",
-                            http_event.stream_id,
-                        )
-                        return
-
-                    if http_event.stream_ended:
-                        stream.more_body = False
-                        stream._request_complete = True
-
-                    stream._body += http_event.data  # add event data to stream's body
+                        self._active_streams_sessions.pop(http_event.stream_id, None)
+        else:
+            super().quic_event_received(event=event)  # pass unhandled event to parent class event handler
 
     def _create_stream(self, event: HeadersReceived) -> None:
         """
