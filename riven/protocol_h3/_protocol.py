@@ -30,7 +30,7 @@ from rcp import (
 from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
 from ..exceptions import exceptions
 from ._session_wt import WebTransportSessionProtocol
-from ._stream_utils import ConnectionInfo, HTTP3Stream
+from ._stream_h3 import ConnectionInfo, HTTP3Stream
 from .h3_protocol import H3Protocol
 
 if TYPE_CHECKING:
