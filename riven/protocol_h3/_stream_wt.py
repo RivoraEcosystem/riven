@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from aioquic.h3.connection import ErrorCode
 
 from aioquic.quic.connection import (
     stream_is_client_initiated,
@@ -16,6 +17,9 @@ from rcp import (
     WebTransportStreamWriteEvent,
     Writer,
 )
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ._protocol import RivenH3
 
 from ..exceptions import exceptions
 
@@ -43,9 +47,12 @@ class StreamReader(Reader):
         super().__init__()
 
     async def read(self) -> WebTransportStreamReadEvent:
-        while self.stream.stream_data_buffer == b"":
+        while True:
             if self.is_closed:
-                raise StreamReaderClosed
+                raise StreamReaderClosed("Cannot read from a closed stream")
+
+            if self.stream.stream_data_buffer:
+                break
 
             read_waiter = asyncio.get_running_loop().create_future()
             self.waiters.append(read_waiter)
@@ -61,6 +68,7 @@ class StreamReader(Reader):
                     self.wake_waiter()
 
                 raise
+            
         event: WebTransportDataReceived = {
             "type": WebTransportDataEventType.RECEIVED,
             "data": self.stream.read_data(),
@@ -70,6 +78,11 @@ class StreamReader(Reader):
     async def close(self) -> None:
         self._closed = True
         self.wake_all_waiters()
+        # FIXME: add error code implementation according to ietf draft 16 for webtransport over http3
+        self.stream.protocol._quic.stop_stream(
+            stream_id=self.stream.stream_id
+        )
+        self.stream.protocol.transmit()
 
     def wake_waiter(self) -> None:
         while self.waiters:
@@ -90,9 +103,33 @@ class StreamWriter(Writer):
         self.stream = stream
         super().__init__()
 
-    async def write(self, event: WebTransportStreamWriteEvent) -> None: ...
+    async def write(self, event: WebTransportStreamWriteEvent) -> None:
+        if self.is_closed:
+            raise StreamWriterClosed("Cannot write on a closed stream")
+        
+        if event['type'] == WebTransportDataEventType.SEND:
+            data = event.get('data',b"")
 
-    async def close(self) -> None: ...
+            if not isinstance(data,bytes):
+                raise exceptions.InvalidEventField(field="WebTransport stream data",got=type(data),expected=bytes)
+
+            self.stream.protocol._quic.send_stream_data(
+                stream_id=self.stream.stream_id,
+                data=data,
+                end_stream=False
+            )
+            self.stream.protocol.transmit()
+            
+        else:
+            raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent")
+
+    async def close(self) -> None:
+        self._closed = True
+        # FIXME: add error code implementation according to ietf draft 16 for webtransport over http3
+        self.stream.protocol._quic.reset_stream(
+            stream_id=self.stream.stream_id
+        )
+        self.stream.protocol.transmit()
 
 
 class WebTransportStream:
@@ -100,9 +137,9 @@ class WebTransportStream:
     _IS_UNIDIRECTIONAL = 1 << 1
     _IS_CLIENT_INITIATED = 1 << 2
 
-    def __init__(self, stream_id: int):
+    def __init__(self, stream_id: int, protocol:RivenH3):
         self.stream_id = stream_id
-
+        self.protocol = protocol
         self._flags: int = 0
         self.stream_data_buffer: bytearray | None = None
         self.reader: StreamReader | None = None
