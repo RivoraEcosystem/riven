@@ -1,9 +1,11 @@
-name: Quality checks
+name: Quality and Release Checks
 
 on:
   pull_request:
   push:
     branches: [main]
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -22,12 +24,82 @@ jobs:
           python -m pip install -e .
           python -m pip install -r requirements/ci.txt
       - name: Ruff lint
-        run: ruff check riven
+        run: ruff check riven .github/scripts
       - name: Ruff format check
-        run: ruff format --check riven
+        run: ruff format --check riven .github/scripts
       - name: Codespell
-        run: codespell riven README.md pyproject.toml MANIFEST.in requirements/ci.txt .github/workflows/quality.yml
+        run: codespell riven README.md pyproject.toml MANIFEST.in requirements/ci.txt .github/workflows/quality.yml .github/release-files.json .github/scripts/check_release_contents.py
       - name: Pylint import and circular import checks
         run: pylint --disable=all --enable=E0401,E0402,E0611,R0401 --ignored-modules=uvloop,winloop riven
       - name: Check source distribution manifest
         run: check-manifest
+
+  package-compatibility:
+    name: Build and Check compatibility
+    needs: quality
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+      - name: Build source distribution and wheel
+        run: python -m build
+      - name: Check package contents against allowlist
+        run: python .github/scripts/check_release_contents.py --dist-dir dist
+
+  package:
+    name: Build and Validate Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+      - name: Clean previous build artifacts
+        run: rm -rf build dist ./*.egg-info
+      - name: Build source distribution and wheel
+        run: python -m build
+      - name: Validate package metadata
+        run: python -m twine check dist/*
+      - name: Inspect wheel contents
+        run: python -m zipfile -l dist/*.whl
+      - name: Inspect source distribution contents
+        run: tar -tzf dist/*.tar.gz
+      - name: Enforce release contents allowlist
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python .github/scripts/check_release_contents.py --dist-dir dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [quality, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_TOKEN }}
+
