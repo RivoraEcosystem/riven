@@ -1,10 +1,8 @@
 # Riven
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/RivoraEcosystem/riven/main/assets/riven_logo_light.png">
-    <img src="https://raw.githubusercontent.com/RivoraEcosystem/riven/main/assets/riven_logo_dark.png" alt="Riven logo" width="700">
-  </picture>
+  <img src="https://raw.githubusercontent.com/RivoraEcosystem/riven/main/assets/riven_logo_dark.png#gh-dark-mode-only" alt="Riven logo" width="700">
+  <img src="https://raw.githubusercontent.com/RivoraEcosystem/riven/main/assets/riven_logo_light.png#gh-light-mode-only" alt="Riven logo" width="700">
 </p>
 
 Riven is an HTTP/3 server for Python applications, built around the requirements of [RFC 9114](https://www.rfc-editor.org/rfc/rfc9114.html).
