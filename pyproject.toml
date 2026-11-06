@@ -56,4 +56,4 @@ line-length = 110
 select = ["E", "F", "I"]
 
 [tool.check-manifest]
-ignore = ["requirements/*"]
+ignore = ["requirements/*", "assets/*"]
