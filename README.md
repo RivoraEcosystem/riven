@@ -1,5 +1,13 @@
 # Riven
 
+<table>
+  <tr>
+    <td align="center" bgcolor="#0d1117">
+      <img src="https://raw.githubusercontent.com/RivoraEcosystem/riven/main/assets/riven_logo.png" alt="Riven logo" width="700">
+    </td>
+  </tr>
+</table>
+
 Riven is an HTTP/3 server for Python applications, built around the requirements of [RFC 9114](https://www.rfc-editor.org/rfc/rfc9114.html).
 
 Riven provides two application interfaces:
