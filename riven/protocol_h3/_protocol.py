@@ -133,6 +133,7 @@ class RivenH3(QuicConnectionProtocol):
                             )
                             self.transmit()
                             stream._stream_reset = True
+                            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
                             protocol_logger.error(
                                 "Failed to handle HTTP/3 DataReceived event for stream %d - "
                                 "Stream Closed By Application",
@@ -148,11 +149,10 @@ class RivenH3(QuicConnectionProtocol):
 
                     elif isinstance(stream, WebTransportSessionProtocol):
                         if stream._closed:
-                            self._quic.reset_stream(
-                                stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
-                            )
+                            # TODO: implement reset_stream_at to reset stream
                             self.transmit()
                             stream._stream_reset = True
+                            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
                             protocol_logger.error(
                                 "Failed to handle HTTP/3 DataReceived event for Webtransport CONNECT "
                                 "stream %d - Stream Closed By Application",
@@ -170,6 +170,7 @@ class RivenH3(QuicConnectionProtocol):
                             stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
                         )
                         self.transmit()
+                        # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
                         protocol_logger.error(
                             "Failed to handle HTTP/3 DataReceived event for stream %d "
                             "- Invalid Stream Type %s",
@@ -429,6 +430,7 @@ class RivenH3(QuicConnectionProtocol):
             # reset stream on request malformed errors
             self._quic.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_MESSAGE_ERROR)
             self.transmit()
+            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
             protocol_logger.error(
                 "Malformed HTTP/3 request received on stream %d", event.stream_id, exc_info=err
             )
@@ -436,6 +438,7 @@ class RivenH3(QuicConnectionProtocol):
         except exceptions.InvalidEvent as err:
             self._quic.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR)
             self.transmit()
+            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
             protocol_logger.error(
                 "Malformed HTTP/3 request received on stream %d", event.stream_id, exc_info=err
             )
@@ -452,6 +455,7 @@ class RivenH3(QuicConnectionProtocol):
                 end_stream=True,  # Smooth termination of response
             )
             self.transmit()
+            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
             protocol_logger.error(
                 "WebTransport CONNECT request received on stream %d "
                 "please enable WebTransport using --enable-webtransport",
@@ -473,6 +477,7 @@ class RivenH3(QuicConnectionProtocol):
 
                     stream.close()
                 except Exception as e:
+                    # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
                     protocol_logger.error(
                         "Exception while closing stream %d after connection termination",
                         stream.stream_id,
@@ -482,6 +487,7 @@ class RivenH3(QuicConnectionProtocol):
 
             self.server_state.remove_connection(self)  # remove connection from server state
         except exceptions.InvalidEvent as err:
+            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
             protocol_logger.error("Failed to handle connection termination", exc_info=err)
 
     def _handle_stream_interrupt(self, event: StopSendingReceived | StreamReset):
@@ -502,6 +508,7 @@ class RivenH3(QuicConnectionProtocol):
             stream._stream_reset = True
 
         except (exceptions.InvalidEvent, exceptions.InvalidStream) as err:
+            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
             protocol_logger.error(
                 "Failed to handle HTTP/3 stream interrupt for stream %d", event.stream_id, exc_info=err
             )
