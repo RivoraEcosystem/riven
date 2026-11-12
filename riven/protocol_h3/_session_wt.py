@@ -5,11 +5,19 @@ import logging
 from asyncio import Queue, QueueShutDown
 from typing import TYPE_CHECKING
 
+from aioquic.quic.connection import (
+    stream_is_client_initiated,
+    stream_is_unidirectional,
+)
 from aioquic.h3.events import (
     DatagramReceived,
     DataReceived,
     WebTransportStreamDataReceived,
 )
+
+import contextlib
+from collections.abc import Generator
+
 from rcp import (
     WEBTRANSPORT_EXTENSION,
     RCPApplication,
@@ -18,11 +26,18 @@ from rcp import (
     WebtransportSendEvent,
     WebTransportSessionDisconnect,
     Writer,
+    WebTransportBidirectionalStreamEventType,
+    WebTransportUnidirectionalStreamEventType
 )
+
+from ._stream_wt import WebTransportStream , can_reset_stream , can_stop_sending
 
 from .capsules import (
     WT_CLOSE_SESSION,
 )
+
+from ..exceptions import exceptions
+from .error import WebTransportApplicationErrorCode , WebTransportErrorCode , encode_app_error , decode_app_error
 
 if TYPE_CHECKING:
     from ._protocol import RivenH3
@@ -118,12 +133,71 @@ class WebTransportSessionProtocol:
             for capsule in self._http.parse_webtransport_capsule(self):
                 if isinstance(capsule, WT_CLOSE_SESSION):
                     self.close_session(capsule)
+        elif isinstance(event,WebTransportStreamDataReceived):
+            try:
+                with self._get_or_create_wt_stream(event.stream_id) as stream:
+                     
+                    if event.stream_ended:
+                        stream.reading_closed = True
 
-    def wt_stream_created(self, stream_id: int):
+                    stream._feed_data(data=event.data)
+
+                return
+
+            except (exceptions.InvalidStream , ValueError) as exc:
+                # error in internal stream mapping not a protocol Error close the stream's both ends
+                if can_stop_sending(event.stream_id):
+                    self._quic.stop_stream(
+                        stream_id=event.stream_id,
+                        error_code=encode_app_error(
+                            WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR
+                        )
+                    )
+                if can_reset_stream(event.stream_id):
+                    # TODO: add stream_reset_at logic
+                    ...
+                    
+                self._protocol.transmit()
+                protocol_logger.error(
+                    "Failed to handle WebTransportStreamDataReceived event for Webtransport stream "
+                    "stream %d - Invalid Stream Type or Stream Already Exists",
+                    event.stream_id,
+                    exc_info=exc
+                )
+
+    def _wt_stream_created(self, stream_id: int):
+        if stream_id in self._stream_ids:
+            raise ValueError(f"{stream_id} already exists")
         self._stream_ids.add(stream_id)
 
-    def wt_stream_ended(self, stream_id: int):
+    def _wt_stream_ended(self, stream_id: int):
         self._stream_ids.discard(stream_id)
+
+    @contextlib.contextmanager
+    def _get_or_create_wt_stream(self,stream_id:int) -> Generator[WebTransportStream]:
+        
+        stream = self._protocol._active_streams_sessions.get(stream_id)
+
+        if stream is None:
+            stream = WebTransportStream(
+                stream_id=stream_id,
+                session_id=self.session_id,
+                protocol=self
+            )
+            self._protocol._active_streams_sessions[stream_id] = stream
+            self._wt_stream_created(stream_id)
+            
+
+        elif not isinstance(stream, WebTransportStream):
+            raise exceptions.InvalidStream(stream, WebTransportStream)
+
+        try:
+            yield stream
+        finally:
+            # remove stream if closed
+            if stream.closed:
+                self._protocol._active_streams_sessions.pop(stream.stream_id,None)
+                self._wt_stream_ended(stream_id=stream.stream_id)
 
     def handle_session_start(self) -> None:
         """

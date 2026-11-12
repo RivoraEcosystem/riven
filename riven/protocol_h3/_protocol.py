@@ -10,6 +10,7 @@ from aioquic.h3.connection import H3_ALPN, ErrorCode, FrameType
 from aioquic.h3.events import (
     DataReceived,
     HeadersReceived,
+    WebTransportStreamDataReceived
 )
 from aioquic.quic.events import (
     ConnectionTerminated,
@@ -30,8 +31,10 @@ from rcp import (
 from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
 from ..exceptions import exceptions
 from ._session_wt import WebTransportSessionProtocol
+from ._stream_wt import WebTransportStream , can_reset_stream , can_stop_sending
 from ._stream_h3 import ConnectionInfo, HTTP3Stream
 from .h3_protocol import H3Protocol
+from .error import encode_app_error ,decode_app_error , WebTransportApplicationErrorCode
 
 if TYPE_CHECKING:
     from ..server import RivenState
@@ -94,7 +97,7 @@ class RivenH3(QuicConnectionProtocol):
         self.config = config
         self.app_state = app_state
         self.server_state = server_state
-        self._active_streams_sessions: dict[int, HTTP3Stream | WebTransportSessionProtocol] = dict()
+        self._active_streams_sessions: dict[int, HTTP3Stream | WebTransportSessionProtocol | WebTransportStream] = dict()
         self._http = None
         self._disconnected = False
         self.server_state.add_connection(self)  # add connection to server state
@@ -178,6 +181,34 @@ class RivenH3(QuicConnectionProtocol):
                             type(stream).__name__ if stream is not None else "None",
                         )
                         self._active_streams_sessions.pop(http_event.stream_id, None)
+                elif isinstance(http_event,WebTransportStreamDataReceived):
+                    session = self._active_streams_sessions.get(http_event.session_id)
+
+                    if isinstance(session,WebTransportSessionProtocol):
+                        session.handle_webtransport_event(event=http_event)
+                    else:
+                        if can_stop_sending(stream_id=http_event.stream_id):
+                            self._quic.stop_stream(
+                                stream_id=http_event.stream_id,
+                                error_code=encode_app_error(
+                                    code=WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR
+                                )
+                            )
+
+                        if can_reset_stream(stream_id=http_event.stream_id):
+                            # TODO: add reset_stream_at logic
+                            ...
+
+                        self.transmit()
+                        protocol_logger.error(
+                            "Failed to handle WebTransportStreamDataReceived event for session %d "
+                            "- Invalid Session Type %s",
+                            http_event.session_id,
+                            type(session).__name__ if session is not None else "None",
+                        )
+                        # TODO: session teardown logic after session level error
+                        
+
         else:
             super().quic_event_received(event=event)  # pass unhandled event to parent class event handler
 
@@ -491,6 +522,7 @@ class RivenH3(QuicConnectionProtocol):
             protocol_logger.error("Failed to handle connection termination", exc_info=err)
 
     def _handle_stream_interrupt(self, event: StopSendingReceived | StreamReset):
+        # FIXME: handle stop sending and stream reset logic seprately
         try:
             if not isinstance(event, (StreamReset, StopSendingReceived)):
                 raise exceptions.InvalidEvent(event)
