@@ -183,3 +183,7 @@ class WebTransportConnectStreamEnded(RivenException):
 
 class CapsuleError(RivenException):
     """Raised When WebTransport Capsules have error during parsing or validation"""
+
+
+class OperationForbidden(RivenException):
+    """Raised when stream/sessions perform a Unauthorised operation"""

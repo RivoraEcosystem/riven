@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from rcp.events import Headers
+from rcp.http.events import Headers
 
 
 @dataclass(slots=True, frozen=True)

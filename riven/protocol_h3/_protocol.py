@@ -488,3 +488,51 @@ class RivenH3(QuicConnectionProtocol):
 
     def is_lowercase_header(name: bytes) -> bool:  # return True only if there is no uppercase character
         return not any(65 <= c <= 90 for c in name)
+
+    def remove_stream(self, stream_id: int, remover: HTTP3Stream | RivenH3) -> None:
+        """
+        Remove a stream from active streams after validating ownership.
+
+        HTTP3Stream instances are only allowed to remove themselves.
+
+        .. note::
+            RivenH3 is allowed to remove any registered stream.
+
+        .. warning::
+            If an HTTP3Stream attempts to remove another stream, the
+            remover itself will be removed from active streams before
+            raising OperationForbidden.
+
+        :param stream_id: ID of the stream to be removed.
+        :param remover: Stream or session requesting the removal.
+
+        :raises ~riven.exceptions.exceptions.InvalidStream:
+            If the remover is not an HTTP3Stream or RivenH3 instance.
+
+        :raises ~riven.exceptions.exceptions.OperationForbidden:
+            If an HTTP3Stream attempts to remove any stream other than itself.
+        """
+
+        if not isinstance(remover, (HTTP3Stream, RivenH3)):
+            raise exceptions.InvalidStream(remover, HTTP3Stream)
+
+        # RivenH3 can remove any stream.
+        if isinstance(remover, RivenH3):
+            self._active_streams_sessions.pop(stream_id, None)
+            return
+
+        # HTTP3Stream can only remove itself.
+        if remover.stream_id != stream_id or (self._active_streams_sessions.get(stream_id) is not remover):
+            protocol_logger.error(
+                "Forbidden operation - stream with stream_id %d attempted to remove stream_id %d",
+                remover.stream_id,
+                stream_id,
+            )
+
+            # Remove the unauthorized remover itself.
+            if self._active_streams_sessions.get(remover.stream_id) is remover:
+                self._active_streams_sessions.pop(remover.stream_id, None)
+
+            raise exceptions.OperationForbidden("Cannot remove streams owned by another stream")
+
+        self._active_streams_sessions.pop(stream_id, None)
