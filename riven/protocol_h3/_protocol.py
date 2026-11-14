@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
 
+type Stream = HTTP3Stream | WebTransportStream
+
 
 def send_goaway_and_disconnect(
     protocol: RivenH3, error_code: int = ErrorCode.H3_NO_ERROR, reason_phrase="Server Shutting down"
@@ -97,7 +99,7 @@ class RivenH3(QuicConnectionProtocol):
         self.config = config
         self.app_state = app_state
         self.server_state = server_state
-        self._active_streams_sessions: dict[int, HTTP3Stream | WebTransportSessionProtocol | WebTransportStream] = dict()
+        self._active_streams_sessions: dict[int, Stream | WebTransportSessionProtocol] = dict()
         self._http = None
         self._disconnected = False
         self.server_state.add_connection(self)  # add connection to server state
@@ -180,7 +182,7 @@ class RivenH3(QuicConnectionProtocol):
                             http_event.stream_id,
                             type(stream).__name__ if stream is not None else "None",
                         )
-                        self._active_streams_sessions.pop(http_event.stream_id, None)
+                        self.remove_stream(http_event.stream_id, self)
                 elif isinstance(http_event,WebTransportStreamDataReceived):
                     session = self._active_streams_sessions.get(http_event.session_id)
 
@@ -552,50 +554,137 @@ class RivenH3(QuicConnectionProtocol):
     def is_lowercase_header(name: bytes) -> bool:  # return True only if there is no uppercase character
         return not any(65 <= c <= 90 for c in name)
 
-    def remove_stream(self, stream_id: int, remover: HTTP3Stream | RivenH3) -> None:
+    
+    def remove_stream(
+        self,
+        stream_id: int,
+        remover: HTTP3Stream | WebTransportSessionProtocol | RivenH3,
+    ) -> None:
         """
-        Remove a stream from active streams after validating ownership.
+        Remove a registered stream or WebTransport session after validating
+        the ownership and authorization of the requesting object.
 
-        HTTP3Stream instances are only allowed to remove themselves.
+        Removal permissions are strictly enforced according to the remover type:
 
-        .. note::
-            RivenH3 is allowed to remove any registered stream.
+        * RivenH3:
+            May remove any registered stream or WebTransport session.
 
-        .. warning::
-            If an HTTP3Stream attempts to remove another stream, the
-            remover itself will be removed from active streams before
-            raising OperationForbidden.
+        * HTTP3Stream:
+            May only remove itself. The following conditions must both hold:
+                - `stream_id == remover.stream_id`
+                - The registered object for `stream_id` is `remover`.
 
-        :param stream_id: ID of the stream to be removed.
-        :param remover: Stream or session requesting the removal.
+            If an HTTP3Stream attempts to remove another object, the requesting
+            stream is removed from the active registry (if it is still registered
+            under its own stream ID) before raising OperationForbidden.
 
-        :raises ~riven.exceptions.exceptions.InvalidStream:
-            If the remover is not an HTTP3Stream or RivenH3 instance.
+        * WebTransportSessionProtocol:
+            May remove:
+                - Itself, provided the registered object is the same session.
+                - A WebTransportStream belonging to that exact session.
+
+            A session cannot remove another WebTransport session or a stream
+            belonging to another WebTransport session.
+
+        * WebTransportStream:
+            Cannot remove itself or any other stream or session.
+            Removal of WebTransportStream instances must be performed
+            by their owning WebTransportSessionProtocol or RivenH3.
+
+        :param stream_id:
+            ID of the registered stream or WebTransport session to remove.
+
+        :param remover:
+            Object requesting the removal. Must be an instance of
+            HTTP3Stream, WebTransportSessionProtocol, or RivenH3.
 
         :raises ~riven.exceptions.exceptions.OperationForbidden:
-            If an HTTP3Stream attempts to remove any stream other than itself.
+            If the remover is not an allowed type or is not authorized
+            to remove the requested stream or session.
+
+            Specifically:
+                - HTTP3Stream attempts to remove an object other than itself.
+                - WebTransportStream attempts any removal.
+                - WebTransportSessionProtocol attempts to remove another
+                  session or a stream that does not belong to it.
         """
 
-        if not isinstance(remover, (HTTP3Stream, RivenH3)):
-            raise exceptions.InvalidStream(remover, HTTP3Stream)
-
-        # RivenH3 can remove any stream.
+        if not isinstance(
+            remover,
+            (HTTP3Stream, WebTransportStream, WebTransportSessionProtocol, RivenH3),
+        ):
+            protocol_logger.debug(
+                "Forbidden operation - Invalid remover type %s "
+                "attempted to remove stream_id %d",
+                type(remover).__name__,
+                stream_id,
+            )
+            raise exceptions.OperationForbidden(
+                f"Unexpected remover type: {type(remover).__name__}"
+            )
+        
+        # RivenH3 has unrestricted removal permissions.
         if isinstance(remover, RivenH3):
             self._active_streams_sessions.pop(stream_id, None)
             return
 
+        # WebTransportStream instances cannot remove anything
+        if isinstance(remover, WebTransportStream):
+            protocol_logger.debug(
+                "Forbidden operation - WebTransportStream with stream_id %d "
+                "attempted to remove stream_id %d",
+                remover.stream_id,
+                stream_id,
+            )
+            raise exceptions.OperationForbidden(
+                "WebTransportStream cannot remove itself or other streams/sessions"
+            )
+
+        target = self._active_streams_sessions.get(stream_id)
+
+        # WebTransportSessionProtocol can only remove itself or its own streams
+        if isinstance(remover, WebTransportSessionProtocol):
+
+            # A session can remove itself
+            if target is remover:
+                self._active_streams_sessions.pop(stream_id, None)
+                return
+
+            # A session can remove only WebTransportStream instances
+            # belonging to that exact session
+            if isinstance(target, WebTransportStream):
+                if target.protocol is remover:
+                    self._active_streams_sessions.pop(stream_id, None)
+                    return
+
+            protocol_logger.debug(
+                "Forbidden operation - WebTransportSessionProtocol with "
+                "session_id %d attempted to remove unauthorized stream_id %d",
+                remover.session_id,
+                stream_id,
+            )
+            raise exceptions.OperationForbidden(
+                "WebTransportSessionProtocol can only remove itself "
+                "or WebTransportStream instances belonging to its session"
+            )
+
         # HTTP3Stream can only remove itself.
-        if remover.stream_id != stream_id or (self._active_streams_sessions.get(stream_id) is not remover):
-            protocol_logger.error(
-                "Forbidden operation - stream with stream_id %d attempted to remove stream_id %d",
+        if isinstance(remover, HTTP3Stream):
+            if target is remover and remover.stream_id == stream_id:
+                self._active_streams_sessions.pop(stream_id, None)
+                return
+
+            protocol_logger.debug(
+                "Forbidden operation - HTTP3Stream with stream_id %d "
+                "attempted to remove stream_id %d",
                 remover.stream_id,
                 stream_id,
             )
 
-            # Remove the unauthorized remover itself.
+            # Remove the unauthorized remover itself, if still registered.
             if self._active_streams_sessions.get(remover.stream_id) is remover:
                 self._active_streams_sessions.pop(remover.stream_id, None)
 
-            raise exceptions.OperationForbidden("Cannot remove streams owned by another stream")
-
-        self._active_streams_sessions.pop(stream_id, None)
+            raise exceptions.OperationForbidden(
+                "HTTP3Stream cannot remove streams or sessions other than itself"
+            )

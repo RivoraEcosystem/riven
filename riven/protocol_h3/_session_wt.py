@@ -196,7 +196,7 @@ class WebTransportSessionProtocol:
         finally:
             # remove stream if closed
             if stream.closed:
-                self._protocol._active_streams_sessions.pop(stream.stream_id,None)
+                self._protocol.remove_stream(stream_id=stream.stream_id,remover=self)
                 self._wt_stream_ended(stream_id=stream.stream_id)
 
     def handle_session_start(self) -> None:
