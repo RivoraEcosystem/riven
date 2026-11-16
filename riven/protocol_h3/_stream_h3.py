@@ -27,6 +27,67 @@ from aioquic.h3.connection import ErrorCode
 
 from ..exceptions import exceptions
 
+
+def construct_pseudo_headers(status_code: int) -> list[tuple[bytes, bytes]]:
+    return [(b":status", str(status_code).encode("ascii"))]
+
+
+def check_status(code: int) -> bool:
+    # check if status code is in range of valid HTTP codes 100 to 599
+    return 100 <= code <= 599
+
+
+def build_validate_headers(headers: Iterable) -> list[tuple[bytes, bytes]]:
+    validated_headers = []
+
+    if not isinstance(headers, Iterable):
+        raise exceptions.InvalidEventField(field="headers", got=type(headers), expected=Iterable)
+
+    for header in headers:
+        if not isinstance(header, tuple) or len(header) != 2:
+            raise exceptions.InvalidEventField(
+                field="headers",
+                got=type(header),
+                expected=tuple,
+            )
+
+        name, value = header
+
+        if not isinstance(name, bytes):
+            raise exceptions.InvalidEventField(
+                field="header name",
+                got=type(name),
+                expected=bytes,
+            )
+
+        if not isinstance(value, bytes):
+            raise exceptions.InvalidEventField(
+                field="header value",
+                got=type(value),
+                expected=bytes,
+            )
+
+        if name.startswith(b":"):
+            raise RuntimeError(
+                f"RCP Violation - Pseudo-header '{name.decode('ascii', errors='replace')}' "
+                "supplied in regular headers by Application."
+            )
+
+        if name != name.lower():
+            raise RuntimeError(f"RCP Violation - Header name must be lowercase: {name!r}")
+
+        # STRICT IETF RFC 9114 ENFORCEMENT FOR HTTP3 HEADERS
+        if name in H3_FORBIDDEN_HEADERS:
+            raise RuntimeError(
+                f"IETF HTTP/3 Protocol Violation - Application attempted to send "
+                f"forbidden connection-specific header field: '{name.decode('ascii', errors='replace')}'"
+            )
+
+        validated_headers.append((name, value))
+
+    return validated_headers
+
+
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
 
@@ -219,8 +280,8 @@ class HTTP3Stream:
         """Close StreamContext and remove from active stream"""
         self.close()
         # remove stream instance from stream mapping
-        self._protocol.remove_stream(stream_id=self.stream_id,remover=self)
-        
+        self._protocol.remove_stream(stream_id=self.stream_id, remover=self)
+
     async def send_500_response(self) -> None:  # send 500 Internal Server Error response to client
         error_response_start: HTTPResponseStartEvent = {
             "type": HTTPResponseEventType.START,
@@ -275,8 +336,8 @@ class HTTP3Stream:
             headers = event.get("headers", [])
 
             headers = (
-                self.construct_pseudo_headers(status_code)
-                + self.build_validate_headers(headers=headers)
+                construct_pseudo_headers(status_code)
+                + build_validate_headers(headers=headers)
                 + self._protocol.config.encoded_headers
             )
 
@@ -338,7 +399,7 @@ class HTTP3Stream:
             headers = event.get("headers", [])
             more_trailers: bool = bool(event.get("more_trailers", False))
 
-            headers = self.build_validate_headers(headers=headers)
+            headers = build_validate_headers(headers=headers)
 
             self._protocol._http.send_headers(
                 stream_id=self.stream_id, headers=headers, end_stream=not more_trailers
@@ -360,13 +421,6 @@ class HTTP3Stream:
         else:
             raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent")
 
-    def construct_pseudo_headers(self, status_code: int) -> list[tuple[bytes, bytes]]:
-        return [(b":status", str(status_code).encode("ascii"))]
-
-    def check_status(self, code: int) -> bool:
-        # check if status code is in range of valid HTTP codes 100 to 599
-        return 100 <= code <= 599
-
     def validate_rcp_response_start_fields(self, event: HTTPResponseStartEvent) -> None:
         """Check and validate rcp event fields"""
 
@@ -377,60 +431,10 @@ class HTTP3Stream:
                 expected=int,
             )
 
-        if not self.check_status(event["status"]):
+        if not check_status(event["status"]):
             raise exceptions.InvalidStatusCode(f"Invalid HTTP Status code: {event['status']}")
 
         return
-
-    def build_validate_headers(self, headers: Iterable) -> list[tuple[bytes, bytes]]:
-        validated_headers = []
-
-        if not isinstance(headers, Iterable):
-            raise exceptions.InvalidEventField(field="headers", got=type(headers), expected=Iterable)
-
-        for header in headers:
-            if not isinstance(header, tuple) or len(header) != 2:
-                raise exceptions.InvalidEventField(
-                    field="headers",
-                    got=type(header),
-                    expected=tuple,
-                )
-
-            name, value = header
-
-            if not isinstance(name, bytes):
-                raise exceptions.InvalidEventField(
-                    field="header name",
-                    got=type(name),
-                    expected=bytes,
-                )
-
-            if not isinstance(value, bytes):
-                raise exceptions.InvalidEventField(
-                    field="header value",
-                    got=type(value),
-                    expected=bytes,
-                )
-
-            if name.startswith(b":"):
-                raise RuntimeError(
-                    f"RCP Violation - Pseudo-header '{name.decode('ascii', errors='replace')}' "
-                    "supplied in regular headers by Application."
-                )
-
-            if name != name.lower():
-                raise RuntimeError(f"RCP Violation - Header name must be lowercase: {name!r}")
-
-            # STRICT IETF RFC 9114 ENFORCEMENT FOR HTTP3 HEADERS
-            if name in H3_FORBIDDEN_HEADERS:
-                raise RuntimeError(
-                    f"IETF HTTP/3 Protocol Violation - Application attempted to send "
-                    f"forbidden connection-specific header field: '{name.decode('ascii', errors='replace')}'"
-                )
-
-            validated_headers.append((name, value))
-
-        return validated_headers
 
     def get_client_addr(self, scope: HTTPScope) -> str:
         client = scope.get("client")

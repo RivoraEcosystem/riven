@@ -7,11 +7,7 @@ from typing import TYPE_CHECKING, Any
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.buffer import Buffer
 from aioquic.h3.connection import H3_ALPN, ErrorCode, FrameType
-from aioquic.h3.events import (
-    DataReceived,
-    HeadersReceived,
-    WebTransportStreamDataReceived
-)
+from aioquic.h3.events import DataReceived, HeadersReceived, WebTransportStreamDataReceived
 from aioquic.quic.events import (
     ConnectionTerminated,
     ProtocolNegotiated,
@@ -31,10 +27,10 @@ from rcp import (
 from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
 from ..exceptions import exceptions
 from ._session_wt import WebTransportSessionProtocol
-from ._stream_wt import WebTransportStream , can_reset_stream , can_stop_sending
 from ._stream_h3 import ConnectionInfo, HTTP3Stream
+from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending
+from .error import WebTransportApplicationErrorCode, encode_app_error
 from .h3_protocol import H3Protocol
-from .error import encode_app_error ,decode_app_error , WebTransportApplicationErrorCode
 
 if TYPE_CHECKING:
     from ..server import RivenState
@@ -183,10 +179,10 @@ class RivenH3(QuicConnectionProtocol):
                             type(stream).__name__ if stream is not None else "None",
                         )
                         self.remove_stream(http_event.stream_id, self)
-                elif isinstance(http_event,WebTransportStreamDataReceived):
+                elif isinstance(http_event, WebTransportStreamDataReceived):
                     session = self._active_streams_sessions.get(http_event.session_id)
 
-                    if isinstance(session,WebTransportSessionProtocol):
+                    if isinstance(session, WebTransportSessionProtocol):
                         session.handle_webtransport_event(event=http_event)
                     else:
                         if can_stop_sending(stream_id=http_event.stream_id):
@@ -194,7 +190,7 @@ class RivenH3(QuicConnectionProtocol):
                                 stream_id=http_event.stream_id,
                                 error_code=encode_app_error(
                                     code=WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR
-                                )
+                                ),
                             )
 
                         if can_reset_stream(stream_id=http_event.stream_id):
@@ -209,7 +205,6 @@ class RivenH3(QuicConnectionProtocol):
                             type(session).__name__ if session is not None else "None",
                         )
                         # TODO: session teardown logic after session level error
-                        
 
         else:
             super().quic_event_received(event=event)  # pass unhandled event to parent class event handler
@@ -524,7 +519,7 @@ class RivenH3(QuicConnectionProtocol):
             protocol_logger.error("Failed to handle connection termination", exc_info=err)
 
     def _handle_stream_interrupt(self, event: StopSendingReceived | StreamReset):
-        # FIXME: handle stop sending and stream reset logic seprately
+        # FIXME: handle stop sending and stream reset logic separately
         try:
             if not isinstance(event, (StreamReset, StopSendingReceived)):
                 raise exceptions.InvalidEvent(event)
@@ -554,7 +549,6 @@ class RivenH3(QuicConnectionProtocol):
     def is_lowercase_header(name: bytes) -> bool:  # return True only if there is no uppercase character
         return not any(65 <= c <= 90 for c in name)
 
-    
     def remove_stream(
         self,
         stream_id: int,
@@ -614,15 +608,12 @@ class RivenH3(QuicConnectionProtocol):
             (HTTP3Stream, WebTransportStream, WebTransportSessionProtocol, RivenH3),
         ):
             protocol_logger.debug(
-                "Forbidden operation - Invalid remover type %s "
-                "attempted to remove stream_id %d",
+                "Forbidden operation - Invalid remover type %s attempted to remove stream_id %d",
                 type(remover).__name__,
                 stream_id,
             )
-            raise exceptions.OperationForbidden(
-                f"Unexpected remover type: {type(remover).__name__}"
-            )
-        
+            raise exceptions.OperationForbidden(f"Unexpected remover type: {type(remover).__name__}")
+
         # RivenH3 has unrestricted removal permissions.
         if isinstance(remover, RivenH3):
             self._active_streams_sessions.pop(stream_id, None)
@@ -631,8 +622,7 @@ class RivenH3(QuicConnectionProtocol):
         # WebTransportStream instances cannot remove anything
         if isinstance(remover, WebTransportStream):
             protocol_logger.debug(
-                "Forbidden operation - WebTransportStream with stream_id %d "
-                "attempted to remove stream_id %d",
+                "Forbidden operation - WebTransportStream with stream_id %d attempted to remove stream_id %d",
                 remover.stream_id,
                 stream_id,
             )
@@ -644,7 +634,6 @@ class RivenH3(QuicConnectionProtocol):
 
         # WebTransportSessionProtocol can only remove itself or its own streams
         if isinstance(remover, WebTransportSessionProtocol):
-
             # A session can remove itself
             if target is remover:
                 self._active_streams_sessions.pop(stream_id, None)
@@ -675,8 +664,7 @@ class RivenH3(QuicConnectionProtocol):
                 return
 
             protocol_logger.debug(
-                "Forbidden operation - HTTP3Stream with stream_id %d "
-                "attempted to remove stream_id %d",
+                "Forbidden operation - HTTP3Stream with stream_id %d attempted to remove stream_id %d",
                 remover.stream_id,
                 stream_id,
             )
