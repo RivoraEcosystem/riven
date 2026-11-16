@@ -1,4 +1,3 @@
-# ruff: noqa: F401
 from __future__ import annotations
 
 import asyncio
@@ -20,17 +19,11 @@ from rcp import (
     Reader,
     WebTransportBidirectionalStreamEventType,
     WebTransportConnectionEventType,
-    WebTransportCreateServerBidirectionalStream,
-    WebTransportCreateServerUnidirectionalStream,
     WebTransportDatagramEventType,
     WebTransportDatagramReceived,
-    WebTransportDatagramSend,
     WebtransportReceiveEvent,
     WebtransportSendEvent,
-    WebTransportSessionAccept,
-    WebTransportSessionClose,
     WebTransportSessionDisconnect,
-    WebTransportSessionReject,
     WebTransportUnidirectionalStreamEventType,
     Writer,
 )
@@ -41,7 +34,7 @@ from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending
 from .capsules import (
     WT_CLOSE_SESSION,
 )
-from .error import WebTransportApplicationErrorCode, WebTransportErrorCode, decode_app_error, encode_app_error
+from .error import WebTransportApplicationErrorCode, encode_app_error
 
 if TYPE_CHECKING:
     from ._protocol import RivenH3
@@ -202,7 +195,7 @@ class WebTransportSessionProtocol:
         self._stream_ids.discard(stream_id)
 
     @contextlib.contextmanager
-    def _get_or_create_wt_stream(self, stream_id: int) -> Generator[WebTransportStream]:
+    def _get_or_create_wt_stream(self, stream_id: int) -> Generator[WebTransportStream, None, None]:
 
         stream = self._protocol._active_streams_sessions.get(stream_id)
 
@@ -265,7 +258,7 @@ class WebTransportSessionProtocol:
             if self.disconnected:
                 return self.disconnect_event
 
-    async def send(self, event: WebtransportSendEvent) -> None | tuple[Writer, Reader]:
+    async def send(self, event: WebtransportSendEvent) -> None | Writer | tuple[Writer, Reader]:
 
         if event["type"] == WebTransportConnectionEventType.ACCEPT:
             # application cannot accept session if session is not in handshake pending state
@@ -276,7 +269,7 @@ class WebTransportSessionProtocol:
                     f"(current state: {self.session_state!r})"
                 )
 
-            headers = construct_pseudo_headers(200) + build_validate_headers(event.get('headers',[]))
+            headers = construct_pseudo_headers(200) + build_validate_headers(event.get("headers", []))
 
             self._http.send_headers(stream_id=self.session_id, headers=headers)
             self.session_state = SessionState.SESSION_ACCEPTED
@@ -311,56 +304,41 @@ class WebTransportSessionProtocol:
             self.session_state = SessionState.SESSION_REJECTED
             return
 
-        elif event['type'] == WebTransportConnectionEventType.CLOSE:
-            if self.session_state not in (
-                SessionState.SESSION_ACCEPTED,
-                SessionState.SESSION_CLOSING
-            ):
+        elif event["type"] == WebTransportConnectionEventType.CLOSE:
+            if self.session_state not in (SessionState.SESSION_ACCEPTED, SessionState.SESSION_CLOSING):
                 raise RuntimeError(
                     f"RCP Violation - Cannot CLOSE WebTransport session. "
                     f"Session is not in accepted/closing state."
                     f"(current state: {self.session_state!r})"
                 )
 
-            reason = event.get('reason',"")
+            reason = event.get("reason", "")
             if not isinstance(reason, str):
-                raise exceptions.InvalidEventField(
-                    field="reason",
-                    got=type(reason),
-                    expected=str
-                )
-            
+                raise exceptions.InvalidEventField(field="reason", got=type(reason), expected=str)
+
             raw_reason = reason.encode("utf-8")
 
             if len(raw_reason) > 1024:
                 raise RuntimeError(
-                    f"RCP Violation - Close reason exceeds 1024 bytes."
-                    f"length : {len(raw_reason)}"
+                    f"RCP Violation - Close reason exceeds 1024 bytes.length : {len(raw_reason)}"
                 )
 
-            error_code = event.get('error_code',0)
+            error_code = event.get("error_code", 0)
 
-            if isinstance(error_code, bool) or not isinstance(error_code,int):
-                raise exceptions.InvalidEventField(
-                    field='error_code',
-                    got=type(error_code),
-                    expected=int
-                )
+            if isinstance(error_code, bool) or not isinstance(error_code, int):
+                raise exceptions.InvalidEventField(field="error_code", got=type(error_code), expected=int)
 
             try:
-                wire_code = encode_app_error(error_code)
+                wire_code = encode_app_error(error_code)  # noqa: F841
             except ValueError as exc:
-                raise RuntimeError(
-                    f"RCP Violation - Close error code exceed 4 bytes"
-                ) from exc
+                raise RuntimeError("RCP Violation - Close error code exceed 4 bytes") from exc
 
             # TODO: WT_CLOSE_SESSION sending logic
 
             self.session_state = SessionState.SESSION_CLOSED
             return
 
-        elif event['type'] == WebTransportDatagramEventType.SEND:
-            
+        elif event["type"] == WebTransportDatagramEventType.SEND:
             if self.session_state != SessionState.SESSION_ACCEPTED:
                 raise RuntimeError(
                     f"RCP Violation - Cannot send DATAGRAM. "
@@ -370,12 +348,43 @@ class WebTransportSessionProtocol:
 
             data = event["data"]
 
-            if not isinstance(data,bytes):
-                raise exceptions.InvalidEventField(
-                    field='data',
-                    got=type(data),
-                    expected=bytes
+            if not isinstance(data, bytes):
+                raise exceptions.InvalidEventField(field="data", got=type(data), expected=bytes)
+
+            self._http.send_datagram(stream_id=self.session_id, data=data)
+            return
+
+        elif event["type"] == WebTransportUnidirectionalStreamEventType.SERVER:
+            if self.session_state != SessionState.SESSION_ACCEPTED:
+                raise RuntimeError(
+                    f"RCP Violation - Cannot start UNIDIRECTIONAL stream. "
+                    f"Session must be ACCEPTED before starting "
+                    f"(current state: {self.session_state!r})"
                 )
 
-            self._http.send_datagram(stream_id=self.session_id,data=data)
-            return
+            stream_id = self._http.create_webtransport_stream(
+                session_id=self.session_id,
+                is_unidirectional=True,
+            )
+
+            with self._get_or_create_wt_stream(stream_id=stream_id) as stream:
+                return stream.writer
+
+        elif event["type"] == WebTransportBidirectionalStreamEventType.SERVER:
+            if self.session_state != SessionState.SESSION_ACCEPTED:
+                raise RuntimeError(
+                    f"RCP Violation - Cannot start BIDIRECTIONAL stream. "
+                    f"Session must be ACCEPTED before starting "
+                    f"(current state: {self.session_state!r})"
+                )
+
+            stream_id = self._http.create_webtransport_stream(
+                session_id=self.session_id,
+                is_unidirectional=False,
+            )
+
+            with self._get_or_create_wt_stream(stream_id=stream_id) as stream:
+                return stream.writer, stream.reader
+
+        else:
+            raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent")
