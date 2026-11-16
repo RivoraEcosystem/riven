@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from aioquic.h3.connection import ErrorCode
+from typing import TYPE_CHECKING
 
 from aioquic.quic.connection import (
     stream_is_client_initiated,
@@ -10,22 +10,25 @@ from aioquic.quic.connection import (
 )
 from rcp import (
     Reader,
+    WebTransportBidirectionalStreamEventType,
+    WebTransportClientBidirectionalStreamStarted,
+    WebTransportClientUnidirectionalStreamStarted,
     WebTransportDataEventType,
     WebTransportDataReceived,
     WebTransportStreamReadEvent,
     WebTransportStreamWriteEvent,
-    Writer,
-    WebTransportClientBidirectionalStreamStarted,
-    WebTransportClientUnidirectionalStreamStarted,
     WebTransportUnidirectionalStreamEventType,
-    WebTransportBidirectionalStreamEventType
+    Writer,
 )
-from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from ._session_wt import WebTransportSessionProtocol
 
 from ..exceptions import exceptions
-from .error import WebTransportApplicationErrorCode , WebTransportErrorCode , encode_app_error , decode_app_error 
+from .error import (
+    WebTransportApplicationErrorCode,
+    encode_app_error,
+)
 
 
 class StreamReaderClosed(exceptions.RivenException):
@@ -43,19 +46,16 @@ class StreamReadingError(exceptions.RivenException):
 class StreamWritingError(exceptions.RivenException):
     """Raised when error occurs during writing the stream"""
 
+
 def can_stop_sending(stream_id: int) -> bool:
     """Return True if STOP_SENDING can be sent on the stream."""
-    return (
-        stream_is_client_initiated(stream_id)
-        or not stream_is_unidirectional(stream_id)
-    )
+    return stream_is_client_initiated(stream_id) or not stream_is_unidirectional(stream_id)
+
 
 def can_reset_stream(stream_id: int) -> bool:
     """Return True if RESET_STREAM can be sent on the stream."""
-    return not (
-        stream_is_client_initiated(stream_id)
-        and stream_is_unidirectional(stream_id)
-    )
+    return not (stream_is_client_initiated(stream_id) and stream_is_unidirectional(stream_id))
+
 
 class StreamReader(Reader):
     def __init__(self, stream: WebTransportStream):
@@ -81,11 +81,11 @@ class StreamReader(Reader):
                 except ValueError:
                     pass
 
-                if self.stream.stream_data_buffer:  # data still exists in buffer wakeup next consumer
+                if not self.stream._buffer_is_empty():  # data still exists in buffer wakeup next consumer
                     self.wake_waiter()
 
                 raise
-            
+
         event: WebTransportDataReceived = {
             "type": WebTransportDataEventType.RECEIVED,
             "data": self.stream._consume_buffer(),
@@ -101,7 +101,7 @@ class StreamReader(Reader):
         self.wake_all_waiters()
         self.stream.protocol._quic.stop_stream(
             stream_id=self.stream.stream_id,
-            error_code=encode_app_error(WebTransportApplicationErrorCode.WT_APP_STOP_SENDING_BY_APPLICATION)
+            error_code=encode_app_error(WebTransportApplicationErrorCode.WT_APP_STOP_SENDING_BY_APPLICATION),
         )
         self.stream.protocol._protocol.transmit()
 
@@ -127,30 +127,29 @@ class StreamWriter(Writer):
     async def write(self, event: WebTransportStreamWriteEvent) -> None:
         if self.is_closed:
             raise StreamWriterClosed("Cannot write on a closed stream")
-        
-        if event['type'] == WebTransportDataEventType.SEND:
-            data = event.get('data',b"")
 
-            if not isinstance(data,bytes):
-                raise exceptions.InvalidEventField(field="WebTransport stream data",got=type(data),expected=bytes)
+        if event["type"] == WebTransportDataEventType.SEND:
+            data = event.get("data", b"")
+
+            if not isinstance(data, bytes):
+                raise exceptions.InvalidEventField(
+                    field="WebTransport stream data", got=type(data), expected=bytes
+                )
 
             self.stream.protocol._quic.send_stream_data(
-                stream_id=self.stream.stream_id,
-                data=data,
-                end_stream=False
+                stream_id=self.stream.stream_id, data=data, end_stream=False
             )
             self.stream.protocol._protocol.transmit()
-            
+
         else:
             raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent")
 
     async def close(self) -> None:
         "Gracefully end stream by setting FIN bit"
         self._closed = True
-        self.stream._consume_buffer() # consume remaining data in buffer
+        self.stream._consume_buffer()  # consume remaining data in buffer
         self.stream.protocol._quic.send_stream_data(
-            stream_id=self.stream.stream_id,
-            data=b"",end_stream=True
+            stream_id=self.stream.stream_id, data=b"", end_stream=True
         )
         self.stream.protocol._protocol.transmit()
 
@@ -161,7 +160,7 @@ class WebTransportStream:
     _READING_CLOSED = 1 << 2
     _WRITING_CLOSED = 1 << 3
 
-    def __init__(self, stream_id: int, session_id: int, protocol:WebTransportSessionProtocol):
+    def __init__(self, stream_id: int, session_id: int, protocol: WebTransportSessionProtocol):
         self.stream_id = stream_id
         self.session_id = session_id
         self.protocol = protocol
@@ -210,12 +209,12 @@ class WebTransportStream:
         if not data:
             return
 
-        if self.reader.is_closed: # reader closed drop the buffered data events
+        if self.reader.is_closed:  # reader closed drop the buffered data events
             return
-        
+
         self.stream_data_buffer.extend(data)
         self.reader.wake_waiter()
-    
+
     def _consume_buffer(self) -> bytes:
         """Consume all currently buffered stream data."""
         if self.stream_data_buffer is not None and not self.stream_data_buffer:
@@ -229,7 +228,7 @@ class WebTransportStream:
 
     def post_stream_created_event(self) -> None:
         if not self.is_client_initiated:
-            return    
+            return
 
         if self.is_unidirectional:
             event: WebTransportClientUnidirectionalStreamStarted = {
@@ -255,10 +254,10 @@ class WebTransportStream:
             closed by default, depending on the stream's initiator.
         """
         return (
-            self.writing_closed and
-            self.reading_closed and
-            (self.reader is None or self.reader.is_closed) and
-            (self.writer is None or self.writer.is_closed)
+            self.writing_closed
+            and self.reading_closed
+            and (self.reader is None or self.reader.is_closed)
+            and (self.writer is None or self.writer.is_closed)
         )
 
     @property
@@ -283,12 +282,12 @@ class WebTransportStream:
 
     @reading_closed.setter
     def reading_closed(self, value: bool) -> None:
-        self._set_flag(self._READING_CLOSED,value)
+        self._set_flag(self._READING_CLOSED, value)
 
     @property
     def writing_closed(self) -> bool:
         return self._get_flag(self._WRITING_CLOSED)
 
     @writing_closed.setter
-    def writing_closed(self,value: bool) -> None:
-        self._set_flag(self._WRITING_CLOSED,value)
+    def writing_closed(self, value: bool) -> None:
+        self._set_flag(self._WRITING_CLOSED, value)

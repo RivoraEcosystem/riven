@@ -1,46 +1,63 @@
+# ruff: noqa: F401
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from asyncio import Queue, QueueShutDown
+from collections.abc import Generator
+from enum import IntEnum
 from typing import TYPE_CHECKING
 
-from aioquic.quic.connection import (
-    stream_is_client_initiated,
-    stream_is_unidirectional,
-)
 from aioquic.h3.events import (
     DatagramReceived,
     DataReceived,
     WebTransportStreamDataReceived,
 )
-
-import contextlib
-from collections.abc import Generator
-
 from rcp import (
     WEBTRANSPORT_EXTENSION,
     RCPApplication,
     Reader,
+    WebTransportBidirectionalStreamEventType,
+    WebTransportConnectionEventType,
+    WebTransportCreateServerBidirectionalStream,
+    WebTransportCreateServerUnidirectionalStream,
+    WebTransportDatagramEventType,
+    WebTransportDatagramReceived,
+    WebTransportDatagramSend,
     WebtransportReceiveEvent,
     WebtransportSendEvent,
+    WebTransportSessionAccept,
+    WebTransportSessionClose,
     WebTransportSessionDisconnect,
+    WebTransportSessionReject,
+    WebTransportUnidirectionalStreamEventType,
     Writer,
-    WebTransportBidirectionalStreamEventType,
-    WebTransportUnidirectionalStreamEventType
-)
-
-from ._stream_wt import WebTransportStream , can_reset_stream , can_stop_sending
-
-from .capsules import (
-    WT_CLOSE_SESSION,
 )
 
 from ..exceptions import exceptions
-from .error import WebTransportApplicationErrorCode , WebTransportErrorCode , encode_app_error , decode_app_error
+from ._stream_h3 import build_validate_headers, check_status, construct_pseudo_headers
+from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending
+from .capsules import (
+    WT_CLOSE_SESSION,
+)
+from .error import WebTransportApplicationErrorCode, WebTransportErrorCode, decode_app_error, encode_app_error
 
 if TYPE_CHECKING:
     from ._protocol import RivenH3
+
+
+class SessionState(IntEnum):
+    HANDSHAKE_PENDING = 0
+    SESSION_ACCEPTED = 1
+    SESSION_REJECTED = 2
+    SESSION_CLOSING = 3
+    SESSION_CLOSED = 4
+
+
+def is_2xx_status(code: int) -> bool:
+    return 200 <= code <= 299
+
 
 access_logger = logging.getLogger("riven.access")
 protocol_logger = logging.getLogger("riven.protocol")
@@ -52,8 +69,8 @@ class WebTransportSessionProtocol:
     """
 
     _CLOSED = 1 << 0
-    _STREAM_RESET = 1 << 1
-    _STREAM_ENDED = 1 << 2
+    _DISCONNECTED = 1 << 1
+    _APP_ENDED = 1 << 3
 
     __slots__ = (
         "_protocol",
@@ -66,7 +83,7 @@ class WebTransportSessionProtocol:
         "_buffer",
         "_flags",
         "_stream_ids",
-        "disconnected",
+        "session_state",
         "disconnect_event",
         "session_id",
     )
@@ -86,9 +103,12 @@ class WebTransportSessionProtocol:
         self._flags: int = 0
         self._stream_ids: set[int] = set()
 
+        # session state
+        self.session_state: SessionState = SessionState.HANDSHAKE_PENDING
+
         # session disconnect info
-        self.disconnected: bool = False
         self.disconnect_event: WebTransportSessionDisconnect | None = None
+
         self.session_id: int | None = None
 
     def _get_flag(self, mask: int) -> bool:
@@ -109,61 +129,69 @@ class WebTransportSessionProtocol:
         self._set_flag(self._CLOSED, value)
 
     @property
-    def _stream_reset(self) -> bool:
-        return self._get_flag(self._STREAM_RESET)
+    def disconnected(self) -> bool:
+        return self._get_flag(self._DISCONNECTED)
 
-    @_stream_reset.setter
-    def _stream_reset(self, value: bool) -> None:
-        self._set_flag(self._STREAM_RESET, value)
+    @disconnected.setter
+    def disconnected(self, value: bool) -> None:
+        self._set_flag(self._DISCONNECTED, value)
 
     @property
-    def _stream_ended(self) -> bool:
-        return self._get_flag(self._STREAM_ENDED)
+    def app_ended(self) -> bool:
+        return self._get_flag(self._APP_ENDED)
 
-    @_stream_ended.setter
-    def _stream_ended(self, value: bool) -> None:
-        self._set_flag(self._STREAM_ENDED, value)
+    @app_ended.setter
+    def app_ended(self, value: bool) -> None:
+        self._set_flag(self._APP_ENDED, value)
 
     def handle_webtransport_event(self, event) -> None:
         """
         Handle WebTransport specific events.
         """
+        if self.app_ended:
+            # TODO: session teardown logic after CONNECT stream reset or ending
+            ...
+
         if isinstance(event, DataReceived):
             self._buffer += event.data
             for capsule in self._http.parse_webtransport_capsule(self):
                 if isinstance(capsule, WT_CLOSE_SESSION):
                     self.close_session(capsule)
-        elif isinstance(event,WebTransportStreamDataReceived):
+        elif isinstance(event, WebTransportStreamDataReceived):
             try:
                 with self._get_or_create_wt_stream(event.stream_id) as stream:
-                     
                     if event.stream_ended:
                         stream.reading_closed = True
 
                     stream._feed_data(data=event.data)
-
                 return
 
-            except (exceptions.InvalidStream , ValueError) as exc:
+            except (exceptions.InvalidStream, ValueError) as exc:
                 # error in internal stream mapping not a protocol Error close the stream's both ends
                 if can_stop_sending(event.stream_id):
                     self._quic.stop_stream(
                         stream_id=event.stream_id,
-                        error_code=encode_app_error(
-                            WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR
-                        )
+                        error_code=encode_app_error(WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR),
                     )
                 if can_reset_stream(event.stream_id):
                     # TODO: add stream_reset_at logic
                     ...
-                    
+
                 self._protocol.transmit()
                 protocol_logger.error(
                     "Failed to handle WebTransportStreamDataReceived event for Webtransport stream "
                     "stream %d - Invalid Stream Type or Stream Already Exists",
                     event.stream_id,
-                    exc_info=exc
+                    exc_info=exc,
                 )
+
+        elif isinstance(event, DatagramReceived):
+            event: WebTransportDatagramReceived = {
+                "type": WebTransportDatagramEventType.RECEIVED,
+                "data": event.data,
+            }
+            self._queue.put_nowait(event)
+            return
 
     def _wt_stream_created(self, stream_id: int):
         if stream_id in self._stream_ids:
@@ -174,19 +202,14 @@ class WebTransportSessionProtocol:
         self._stream_ids.discard(stream_id)
 
     @contextlib.contextmanager
-    def _get_or_create_wt_stream(self,stream_id:int) -> Generator[WebTransportStream]:
-        
+    def _get_or_create_wt_stream(self, stream_id: int) -> Generator[WebTransportStream]:
+
         stream = self._protocol._active_streams_sessions.get(stream_id)
 
         if stream is None:
-            stream = WebTransportStream(
-                stream_id=stream_id,
-                session_id=self.session_id,
-                protocol=self
-            )
+            stream = WebTransportStream(stream_id=stream_id, session_id=self.session_id, protocol=self)
             self._protocol._active_streams_sessions[stream_id] = stream
             self._wt_stream_created(stream_id)
-            
 
         elif not isinstance(stream, WebTransportStream):
             raise exceptions.InvalidStream(stream, WebTransportStream)
@@ -196,7 +219,7 @@ class WebTransportSessionProtocol:
         finally:
             # remove stream if closed
             if stream.closed:
-                self._protocol.remove_stream(stream_id=stream.stream_id,remover=self)
+                self._protocol.remove_stream(stream_id=stream.stream_id, remover=self)
                 self._wt_stream_ended(stream_id=stream.stream_id)
 
     def handle_session_start(self) -> None:
@@ -243,7 +266,47 @@ class WebTransportSessionProtocol:
                 return self.disconnect_event
 
     async def send(self, event: WebtransportSendEvent) -> None | tuple[Writer, Reader]:
-        try:
-            ...
-        except Exception:
-            ...
+
+        if event["type"] == WebTransportConnectionEventType.ACCEPT:
+            # application cannot accept session if session is not in handshake pending state
+            if self.session_state != SessionState.HANDSHAKE_PENDING:
+                raise RuntimeError(
+                    f"RCP Violation - Cannot ACCEPT WebTransport session. "
+                    f"Session is not in HANDSHAKE_PENDING state "
+                    f"(current state: {self.session_state!r})"
+                )
+
+            headers = construct_pseudo_headers(200) + build_validate_headers(event["headers"])
+
+            self._http.send_headers(stream_id=self.session_id, headers=headers)
+            self.session_state = SessionState.SESSION_ACCEPTED
+            return
+
+        elif event["type"] == WebTransportConnectionEventType.REJECT:
+            # application cannot reject session if session is not in handshake pending state
+            if self.session_state != SessionState.HANDSHAKE_PENDING:
+                raise RuntimeError(
+                    f"RCP Violation - Cannot REJECT WebTransport session. "
+                    f"Session is not in HANDSHAKE_PENDING state "
+                    f"(current state: {self.session_state!r})"
+                )
+
+            status = event["status"]
+            if not check_status(status):
+                raise RuntimeError(
+                    f"RCP Violation - Invalid HTTP status code "
+                    f"{status!r} provided by application for "
+                    f"{event['type']!r} event"
+                )
+
+            if is_2xx_status(status):
+                raise RuntimeError(
+                    f"RCP Violation - Cannot REJECT WebTransport session "
+                    f"with a 2xx HTTP status code ({status})"
+                )
+
+            headers = construct_pseudo_headers(status)
+
+            self._http.send_headers(stream_id=self.session_id, headers=headers)
+            self.session_state = SessionState.SESSION_REJECTED
+            return
