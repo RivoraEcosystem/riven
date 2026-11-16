@@ -13,7 +13,7 @@ from enum import IntEnum
 from typing import TYPE_CHECKING
 
 from aioquic.buffer import Buffer, BufferReadError
-from aioquic.h3.connection import ErrorCode, H3Connection, Setting, SettingsError  # noqa: F401
+from aioquic.h3.connection import H3Connection, Setting, SettingsError
 
 from ..exceptions.exceptions import CapsuleError
 from .capsules import (
