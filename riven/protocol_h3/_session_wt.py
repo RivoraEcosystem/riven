@@ -276,7 +276,7 @@ class WebTransportSessionProtocol:
                     f"(current state: {self.session_state!r})"
                 )
 
-            headers = construct_pseudo_headers(200) + build_validate_headers(event["headers"])
+            headers = construct_pseudo_headers(200) + build_validate_headers(event.get('headers',[]))
 
             self._http.send_headers(stream_id=self.session_id, headers=headers)
             self.session_state = SessionState.SESSION_ACCEPTED
@@ -309,4 +309,73 @@ class WebTransportSessionProtocol:
 
             self._http.send_headers(stream_id=self.session_id, headers=headers)
             self.session_state = SessionState.SESSION_REJECTED
+            return
+
+        elif event['type'] == WebTransportConnectionEventType.CLOSE:
+            if self.session_state not in (
+                SessionState.SESSION_ACCEPTED,
+                SessionState.SESSION_CLOSING
+            ):
+                raise RuntimeError(
+                    f"RCP Violation - Cannot CLOSE WebTransport session. "
+                    f"Session is not in accepted/closing state."
+                    f"(current state: {self.session_state!r})"
+                )
+
+            reason = event.get('reason',"")
+            if not isinstance(reason, str):
+                raise exceptions.InvalidEventField(
+                    field="reason",
+                    got=type(reason),
+                    expected=str
+                )
+            
+            raw_reason = reason.encode("utf-8")
+
+            if len(raw_reason) > 1024:
+                raise RuntimeError(
+                    f"RCP Violation - Close reason exceeds 1024 bytes."
+                    f"length : {len(raw_reason)}"
+                )
+
+            error_code = event.get('error_code',0)
+
+            if isinstance(error_code, bool) or not isinstance(error_code,int):
+                raise exceptions.InvalidEventField(
+                    field='error_code',
+                    got=type(error_code),
+                    expected=int
+                )
+
+            try:
+                wire_code = encode_app_error(error_code)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"RCP Violation - Close error code exceed 4 bytes"
+                ) from exc
+
+            # TODO: WT_CLOSE_SESSION sending logic
+
+            self.session_state = SessionState.SESSION_CLOSED
+            return
+
+        elif event['type'] == WebTransportDatagramEventType.SEND:
+            
+            if self.session_state != SessionState.SESSION_ACCEPTED:
+                raise RuntimeError(
+                    f"RCP Violation - Cannot send DATAGRAM. "
+                    f"Session must be ACCEPTED before sending "
+                    f"(current state: {self.session_state!r})"
+                )
+
+            data = event["data"]
+
+            if not isinstance(data,bytes):
+                raise exceptions.InvalidEventField(
+                    field='data',
+                    got=type(data),
+                    expected=bytes
+                )
+
+            self._http.send_datagram(stream_id=self.session_id,data=data)
             return
