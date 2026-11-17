@@ -26,7 +26,7 @@ from rcp import (
 
 from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
 from ..exceptions import exceptions
-from ._session_wt import WebTransportSessionProtocol
+from ._session_wt import WebTransportSessionProtocol, get_webtransport_stream_header_size
 from ._stream_h3 import ConnectionInfo, HTTP3Stream
 from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending
 from .error import WebTransportApplicationErrorCode, encode_app_error
@@ -149,23 +149,7 @@ class RivenH3(QuicConnectionProtocol):
                         stream._body += http_event.data  # add event data to stream's body
 
                     elif isinstance(stream, WebTransportSessionProtocol):
-                        if stream._closed:
-                            # TODO: implement reset_stream_at to reset stream
-                            self.transmit()
-                            stream._stream_reset = True
-                            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
-                            protocol_logger.error(
-                                "Failed to handle HTTP/3 DataReceived event for Webtransport CONNECT "
-                                "stream %d - Stream Closed By Application",
-                                http_event.stream_id,
-                            )
-                            return
-
-                        if http_event.stream_ended:
-                            stream._stream_ended = True
-
                         stream.handle_webtransport_event(event=http_event)
-
                     else:  # Unknown stream type
                         self._quic.reset_stream(
                             stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
@@ -194,8 +178,15 @@ class RivenH3(QuicConnectionProtocol):
                             )
 
                         if can_reset_stream(stream_id=http_event.stream_id):
-                            # TODO: add reset_stream_at logic
-                            ...
+                            self._quic.reset_stream_at(
+                                stream_id=http_event.stream_id,
+                                error_code=encode_app_error(
+                                    WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR
+                                ),
+                                reliable_size=get_webtransport_stream_header_size(
+                                    stream_id=http_event.stream_id, session_id=http_event.session_id
+                                ),
+                            )
 
                         self.transmit()
                         protocol_logger.error(
