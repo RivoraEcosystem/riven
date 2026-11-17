@@ -8,6 +8,7 @@ from collections.abc import Generator
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
+from aioquic.buffer import size_uint_var
 from aioquic.h3.connection import ErrorCode
 from aioquic.h3.events import (
     DatagramReceived,
@@ -31,7 +32,7 @@ from rcp import (
 
 from ..exceptions import exceptions
 from ._stream_h3 import build_validate_headers, check_status, construct_pseudo_headers
-from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending
+from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending, stream_is_unidirectional
 from .capsules import (
     WT_CLOSE_SESSION,
 )
@@ -39,6 +40,9 @@ from .error import WebTransportApplicationErrorCode, encode_app_error
 
 if TYPE_CHECKING:
     from ._protocol import RivenH3
+
+WEBTRANSPORT_UNI_STREAM = 0x54
+WEBTRANSPORT_BIDI_STREAM = 0x41
 
 
 class SessionState(IntEnum):
@@ -61,6 +65,20 @@ class RCPAppState(IntEnum):
     RUNNING = 1
     CLOSED_WITH_ERROR = 2
     CLOSED = 3
+
+
+def webtransport_header_size(
+    session_id: int,
+    bidirectional: bool,
+) -> int:
+    stream_type = WEBTRANSPORT_BIDI_STREAM if bidirectional else WEBTRANSPORT_UNI_STREAM
+
+    return size_uint_var(stream_type) + size_uint_var(session_id)
+
+
+def get_webtransport_stream_header_size(stream_id: int, session_id: int):
+    is_unidirectional = stream_is_unidirectional(stream_id)
+    return webtransport_header_size(session_id=session_id, bidirectional=(not is_unidirectional))
 
 
 def is_2xx_status(code: int) -> bool:
@@ -143,15 +161,7 @@ class WebTransportSessionProtocol:
                     self.close_session(capsule)
         elif isinstance(event, WebTransportStreamDataReceived):
             if self.rcp_app_state in (RCPAppState.CLOSED_WITH_ERROR, RCPAppState.CLOSED):
-                if can_stop_sending(event.stream_id):
-                    self._quic.stop_stream(
-                        stream_id=event.stream_id,
-                        error_code=encode_app_error(WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR),
-                    )
-
-                if can_reset_stream(event.stream_id):
-                    # TODO: add stream_reset_at logic
-                    ...
+                self.terminate_wt_stream(stream_id=event.stream_id)
                 return
 
             try:
@@ -164,14 +174,7 @@ class WebTransportSessionProtocol:
 
             except (exceptions.InvalidStream, ValueError) as exc:
                 # error in internal stream mapping not a protocol Error close the stream's both ends
-                if can_stop_sending(event.stream_id):
-                    self._quic.stop_stream(
-                        stream_id=event.stream_id,
-                        error_code=encode_app_error(WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR),
-                    )
-                if can_reset_stream(event.stream_id):
-                    # TODO: add stream_reset_at logic
-                    ...
+                self.terminate_wt_stream(stream_id=event.stream_id)
 
                 self._protocol.transmit()
                 protocol_logger.error(
@@ -294,6 +297,26 @@ class WebTransportSessionProtocol:
         )
         self._protocol.transmit()
         self.connect_stream_state = ConnectStreamState.CONNECT_STREAM_500
+
+    def terminate_wt_stream(
+        self, stream_id: int, error_code: int = WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR
+    ):
+        if can_stop_sending(stream_id):
+            self._quic.stop_stream(
+                stream_id=stream_id,
+                error_code=encode_app_error(error_code),
+            )
+
+        if can_reset_stream(stream_id):
+            self._quic.reset_stream_at(
+                stream_id=stream_id,
+                error_code=encode_app_error(error_code),
+                reliable_size=get_webtransport_stream_header_size(
+                    stream_id=stream_id, session_id=self.session_id
+                ),
+            )
+
+        self._protocol.transmit()
 
     async def receive(self) -> None:
         try:
