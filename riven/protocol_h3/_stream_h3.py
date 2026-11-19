@@ -272,8 +272,7 @@ class HTTP3Stream:
         if self._stream_reset or self._protocol._disconnected:
             return
 
-        self._protocol._quic.reset_stream(stream_id=self.stream_id, error_code=error)
-        self._protocol.transmit()
+        self._protocol.reset_stream(stream_id=self.stream_id, error_code=error)
         self._stream_reset = True
 
     async def handle_close(self):
@@ -341,15 +340,13 @@ class HTTP3Stream:
                 + self._protocol.config.encoded_headers
             )
 
-            self._protocol._http.send_headers(stream_id=self.stream_id, headers=headers, end_stream=False)
+            self._protocol.send_http_headers(stream_id=self.stream_id, headers=headers, end_stream=False)
 
             if is_informational:
                 self._informational_sent = True
             else:
                 self._response_status_code = status_code
                 self._response_started = True
-
-            self._protocol.transmit()
             return
 
         elif event["type"] == HTTPResponseEventType.BODY:
@@ -371,8 +368,7 @@ class HTTP3Stream:
 
             # end stream only when there is no more body and there are no trailers
             end_stream = not more_body and not self.trailers_enabled
-            self._protocol._http.send_data(stream_id=self.stream_id, data=body, end_stream=end_stream)
-            self._protocol.transmit()
+            self._protocol.send_http_data(stream_id=self.stream_id, data=body, end_stream=end_stream)
 
             if not more_body:
                 self._response_body_sent = True
@@ -401,10 +397,9 @@ class HTTP3Stream:
 
             headers = build_validate_headers(headers=headers)
 
-            self._protocol._http.send_headers(
+            self._protocol.send_http_headers(
                 stream_id=self.stream_id, headers=headers, end_stream=not more_trailers
             )
-            self._protocol.transmit()
 
             self._response_complete = not more_trailers
             if self._response_complete:

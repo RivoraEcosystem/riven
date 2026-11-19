@@ -23,6 +23,7 @@ from rcp import (
     ScopeType,
     WebTransportScope,
 )
+from rcp.http.events import Headers
 
 from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
 from ..exceptions import exceptions
@@ -129,10 +130,9 @@ class RivenH3(QuicConnectionProtocol):
 
                     if isinstance(stream, HTTP3Stream):
                         if stream._closed:
-                            self._quic.reset_stream(
+                            self.reset_stream(
                                 stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
                             )
-                            self.transmit()
                             stream._stream_reset = True
                             # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
                             protocol_logger.error(
@@ -151,10 +151,9 @@ class RivenH3(QuicConnectionProtocol):
                     elif isinstance(stream, WebTransportSessionProtocol):
                         stream.handle_webtransport_event(event=http_event)
                     else:  # Unknown stream type
-                        self._quic.reset_stream(
+                        self.reset_stream(
                             stream_id=http_event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
                         )
-                        self.transmit()
                         # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
                         protocol_logger.error(
                             "Failed to handle HTTP/3 DataReceived event for stream %d "
@@ -189,6 +188,7 @@ class RivenH3(QuicConnectionProtocol):
                             )
 
                         self.transmit()
+
                         protocol_logger.error(
                             "Failed to handle WebTransportStreamDataReceived event for session %d "
                             "- Invalid Session Type %s",
@@ -216,7 +216,7 @@ class RivenH3(QuicConnectionProtocol):
                 and header_size > self.config.max_header_size
             ):
                 if not self._disconnected:
-                    self._http.send_headers(
+                    self.send_http_headers(
                         stream_id=event.stream_id,
                         headers=[
                             (b":status", b"431"),
@@ -224,8 +224,6 @@ class RivenH3(QuicConnectionProtocol):
                         ],
                         end_stream=True,
                     )
-
-                    self.transmit()
                 return
 
             method = None
@@ -447,23 +445,21 @@ class RivenH3(QuicConnectionProtocol):
             exceptions.H3MalformedMessage,
         ) as err:
             # reset stream on request malformed errors
-            self._quic.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_MESSAGE_ERROR)
-            self.transmit()
+            self.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_MESSAGE_ERROR)
             # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
             protocol_logger.error(
                 "Malformed HTTP/3 request received on stream %d", event.stream_id, exc_info=err
             )
 
         except exceptions.InvalidEvent as err:
-            self._quic.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR)
-            self.transmit()
+            self.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR)
             # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
             protocol_logger.error(
                 "Malformed HTTP/3 request received on stream %d", event.stream_id, exc_info=err
             )
 
         except exceptions.UnsupportedMethod as err:
-            self._http.send_headers(
+            self.send_http_headers(
                 stream_id=event.stream_id,
                 headers=[
                     (b":status", b"405"),
@@ -473,7 +469,6 @@ class RivenH3(QuicConnectionProtocol):
                 ],
                 end_stream=True,  # Smooth termination of response
             )
-            self.transmit()
             # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
             protocol_logger.error(
                 "WebTransport CONNECT request received on stream %d "
@@ -667,3 +662,69 @@ class RivenH3(QuicConnectionProtocol):
             raise exceptions.OperationForbidden(
                 "HTTP3Stream cannot remove streams or sessions other than itself"
             )
+
+    def send_quic_stream_data(
+        self,
+        stream_id: int,
+        data: bytes,
+        end_stream: bool = False,
+    ) -> None:
+        """Write data to a QUIC stream and flush immediately."""
+        self._quic.send_stream_data(
+            stream_id=stream_id,
+            data=data,
+            end_stream=end_stream,
+        )
+        self.transmit()
+
+    def send_http_headers(
+        self,
+        stream_id: int,
+        headers: Headers,
+        end_stream: bool = False,
+    ) -> None:
+        """Write HTTP headers to a stream and flush immediately."""
+        self._http.send_headers(
+            stream_id=stream_id,
+            headers=headers,
+            end_stream=end_stream,
+        )
+        self.transmit()
+
+    def send_http_data(
+        self,
+        stream_id: int,
+        data: bytes,
+        end_stream: bool = False,
+    ) -> None:
+        """Write HTTP data to a stream and flush immediately."""
+        self._http.send_data(
+            stream_id=stream_id,
+            data=data,
+            end_stream=end_stream,
+        )
+        self.transmit()
+
+    def stop_stream(
+        self,
+        stream_id: int,
+        error_code: int,
+    ) -> None:
+        """Write `STOP_SENDING` frame on a stream and flush immediately."""
+        self._quic.stop_stream(
+            stream_id=stream_id,
+            error_code=error_code,
+        )
+        self.transmit()
+
+    def reset_stream(
+        self,
+        stream_id: int,
+        error_code: int,
+    ) -> None:
+        """Write `RESET_STREAM` frame on a stream and flush immediately."""
+        self._quic.reset_stream(
+            stream_id=stream_id,
+            error_code=error_code,
+        )
+        self.transmit()
