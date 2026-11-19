@@ -99,11 +99,10 @@ class StreamReader(Reader):
     async def close(self) -> None:
         self._closed = True
         self.wake_all_waiters()
-        self.stream.protocol._quic.stop_stream(
+        self.stream.protocol.stop_stream(
             stream_id=self.stream.stream_id,
             error_code=encode_app_error(WebTransportApplicationErrorCode.WT_APP_STOP_SENDING_BY_APPLICATION),
         )
-        self.stream.protocol._protocol.transmit()
 
     def wake_waiter(self) -> None:
         while self.waiters:
@@ -136,10 +135,9 @@ class StreamWriter(Writer):
                     field="WebTransport stream data", got=type(data), expected=bytes
                 )
 
-            self.stream.protocol._quic.send_stream_data(
+            self.stream.protocol.send_quic_stream_data(
                 stream_id=self.stream.stream_id, data=data, end_stream=False
             )
-            self.stream.protocol._protocol.transmit()
 
         else:
             raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent")
@@ -148,10 +146,7 @@ class StreamWriter(Writer):
         "Gracefully end stream by setting FIN bit"
         self._closed = True
         self.stream._consume_buffer()  # consume remaining data in buffer
-        self.stream.protocol._quic.send_stream_data(
-            stream_id=self.stream.stream_id, data=b"", end_stream=True
-        )
-        self.stream.protocol._protocol.transmit()
+        self.stream.protocol.send_quic_stream_data(stream_id=self.stream.stream_id, data=b"", end_stream=True)
 
 
 class WebTransportStream:

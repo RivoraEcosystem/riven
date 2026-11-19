@@ -29,6 +29,7 @@ from rcp import (
     WebTransportUnidirectionalStreamEventType,
     Writer,
 )
+from rcp.http.events import Headers
 
 from ..exceptions import exceptions
 from ._stream_h3 import build_validate_headers, check_status, construct_pseudo_headers
@@ -37,7 +38,6 @@ from .capsules import (
     WT_CLOSE_SESSION,
 )
 from .error import WebTransportApplicationErrorCode, encode_app_error
-from rcp.http.events import Headers
 
 if TYPE_CHECKING:
     from ._protocol import RivenH3
@@ -176,8 +176,6 @@ class WebTransportSessionProtocol:
             except (exceptions.InvalidStream, ValueError) as exc:
                 # error in internal stream mapping not a protocol Error close the stream's both ends
                 self.terminate_wt_stream(stream_id=event.stream_id)
-
-                self._protocol.transmit()
                 protocol_logger.error(
                     "Failed to handle WebTransportStreamDataReceived event for Webtransport stream "
                     "stream %d - Invalid Stream Type or Stream Already Exists",
@@ -272,8 +270,7 @@ class WebTransportSessionProtocol:
 
             else:
                 self.rcp_app_state = RCPAppState.CLOSED
-                self._http.send_data(stream_id=self.session_id, data=b"", end_stream=True)
-                self._protocol.transmit()
+                self.send_http_data(stream_id=self.session_id, data=b"", end_stream=True)
 
         finally:
             if not self.session_teared_down:
@@ -288,15 +285,13 @@ class WebTransportSessionProtocol:
         ):
             return
 
-        self._quic.reset_stream(stream_id=self.session_id, error_code=error_code)
-        self._protocol.transmit()
+        self.reset_stream(stream_id=self.session_id, error_code=error_code)
         self.connect_stream_state = ConnectStreamState.CONNECT_STREAM_RESET
 
     def send_500_response(self):
-        self._http.send_headers(
+        self.send_http_headers(
             stream_id=self.session_id, headers=construct_pseudo_headers(500), end_stream=True
         )
-        self._protocol.transmit()
         self.connect_stream_state = ConnectStreamState.CONNECT_STREAM_500
 
     def terminate_wt_stream(
@@ -325,13 +320,11 @@ class WebTransportSessionProtocol:
         data: bytes,
         end_stream: bool = False,
     ) -> None:
-        """Send data on a QUIC stream and transmit immediately."""
         self._protocol.send_quic_stream_data(
             stream_id=stream_id,
             data=data,
             end_stream=end_stream,
         )
-
 
     def send_http_headers(
         self,
@@ -339,13 +332,11 @@ class WebTransportSessionProtocol:
         headers: Headers,
         end_stream: bool = False,
     ) -> None:
-        """Send HTTP headers on a stream and transmit immediately."""
         self._protocol.send_http_headers(
             stream_id=stream_id,
             headers=headers,
             end_stream=end_stream,
         )
-
 
     def send_http_data(
         self,
@@ -353,32 +344,17 @@ class WebTransportSessionProtocol:
         data: bytes,
         end_stream: bool = False,
     ) -> None:
-        """Send HTTP data on a stream and transmit immediately."""
         self._protocol.send_http_data(
             stream_id=stream_id,
             data=data,
             end_stream=end_stream,
         )
 
-    def stop_stream(
-        self,
-        stream_id:int,
-        error_code:int
-    ) -> None:
-        self._protocol.stop_stream(
-            stream_id=stream_id,
-            error_code=error_code
-        )
+    def stop_stream(self, stream_id: int, error_code: int) -> None:
+        self._protocol.stop_stream(stream_id=stream_id, error_code=error_code)
 
-    def reset_stream(
-        self,
-        stream_id:int,
-        error_code:int
-    ) -> None:
-        self._protocol.reset_stream(
-            stream_id=stream_id,
-            error_code=error_code
-        )
+    def reset_stream(self, stream_id: int, error_code: int) -> None:
+        self._protocol.reset_stream(stream_id=stream_id, error_code=error_code)
 
     async def receive(self) -> None:
         try:
@@ -405,7 +381,7 @@ class WebTransportSessionProtocol:
 
             headers = construct_pseudo_headers(200) + build_validate_headers(event.get("headers", []))
 
-            self._http.send_headers(stream_id=self.session_id, headers=headers)
+            self.send_http_headers(stream_id=self.session_id, headers=headers)
             self.session_state = SessionState.SESSION_ACCEPTED
             return
 
@@ -434,7 +410,7 @@ class WebTransportSessionProtocol:
 
             headers = construct_pseudo_headers(status)
 
-            self._http.send_headers(stream_id=self.session_id, headers=headers)
+            self.send_http_headers(stream_id=self.session_id, headers=headers)
             self.session_state = SessionState.SESSION_REJECTED
             return
 
