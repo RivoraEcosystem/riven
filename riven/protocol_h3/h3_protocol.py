@@ -179,8 +179,8 @@ class H3Protocol(H3Connection):
                     WT_CLOSE_SESSION(
                         type=FlowControlCapsuleType.WT_CLOSE_SESSION,
                         length=capsule_length,
-                        application_Error_Code=error_code,
-                        application_Error_Message=error_message,
+                        application_error_code=error_code,
+                        application_error_message=error_message,
                     )
                 )
 

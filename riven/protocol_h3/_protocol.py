@@ -31,6 +31,7 @@ from ._stream_h3 import ConnectionInfo, HTTP3Stream
 from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending
 from .error import WebTransportApplicationErrorCode, encode_app_error
 from .h3_protocol import H3Protocol
+from rcp.http.events import Headers
 
 if TYPE_CHECKING:
     from ..server import RivenState
@@ -667,3 +668,73 @@ class RivenH3(QuicConnectionProtocol):
             raise exceptions.OperationForbidden(
                 "HTTP3Stream cannot remove streams or sessions other than itself"
             )
+
+    def send_quic_stream_data(
+        self,
+        stream_id: int,
+        data: bytes,
+        end_stream: bool = False,
+    ) -> None:
+        """Write data to a QUIC stream and flush immediately."""
+        self._quic.send_stream_data(
+            stream_id=stream_id,
+            data=data,
+            end_stream=end_stream,
+        )
+        self.transmit()
+
+
+    def send_http_headers(
+        self,
+        stream_id: int,
+        headers: Headers,
+        end_stream: bool = False,
+    ) -> None:
+        """Write HTTP headers to a stream and flush immediately."""
+        self._http.send_headers(
+            stream_id=stream_id,
+            headers=headers,
+            end_stream=end_stream,
+        )
+        self.transmit()
+
+
+    def send_http_data(
+        self,
+        stream_id: int,
+        data: bytes,
+        end_stream: bool = False,
+    ) -> None:
+        """Write HTTP data to a stream and flush immediately."""
+        self._http.send_data(
+            stream_id=stream_id,
+            data=data,
+            end_stream=end_stream,
+        )
+        self.transmit()
+
+
+    def stop_stream(
+        self,
+        stream_id: int,
+        error_code: int,
+    ) -> None:
+        """Write `STOP_SENDING` frame on a stream and flush immediately."""
+        self._quic.stop_stream(
+            stream_id=stream_id,
+            error_code=error_code,
+        )
+        self.transmit()
+
+
+    def reset_stream(
+        self,
+        stream_id: int,
+        error_code: int,
+    ) -> None:
+        """Write `RESET_STREAM` frame on a stream and flush immediately."""
+        self._quic.reset_stream(
+            stream_id=stream_id,
+            error_code=error_code,
+        )
+        self.transmit()

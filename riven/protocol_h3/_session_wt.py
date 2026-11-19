@@ -37,6 +37,7 @@ from .capsules import (
     WT_CLOSE_SESSION,
 )
 from .error import WebTransportApplicationErrorCode, encode_app_error
+from rcp.http.events import Headers
 
 if TYPE_CHECKING:
     from ._protocol import RivenH3
@@ -317,6 +318,67 @@ class WebTransportSessionProtocol:
             )
 
         self._protocol.transmit()
+
+    def send_quic_stream_data(
+        self,
+        stream_id: int,
+        data: bytes,
+        end_stream: bool = False,
+    ) -> None:
+        """Send data on a QUIC stream and transmit immediately."""
+        self._protocol.send_quic_stream_data(
+            stream_id=stream_id,
+            data=data,
+            end_stream=end_stream,
+        )
+
+
+    def send_http_headers(
+        self,
+        stream_id: int,
+        headers: Headers,
+        end_stream: bool = False,
+    ) -> None:
+        """Send HTTP headers on a stream and transmit immediately."""
+        self._protocol.send_http_headers(
+            stream_id=stream_id,
+            headers=headers,
+            end_stream=end_stream,
+        )
+
+
+    def send_http_data(
+        self,
+        stream_id: int,
+        data: bytes,
+        end_stream: bool = False,
+    ) -> None:
+        """Send HTTP data on a stream and transmit immediately."""
+        self._protocol.send_http_data(
+            stream_id=stream_id,
+            data=data,
+            end_stream=end_stream,
+        )
+
+    def stop_stream(
+        self,
+        stream_id:int,
+        error_code:int
+    ) -> None:
+        self._protocol.stop_stream(
+            stream_id=stream_id,
+            error_code=error_code
+        )
+
+    def reset_stream(
+        self,
+        stream_id:int,
+        error_code:int
+    ) -> None:
+        self._protocol.reset_stream(
+            stream_id=stream_id,
+            error_code=error_code
+        )
 
     async def receive(self) -> None:
         try:
