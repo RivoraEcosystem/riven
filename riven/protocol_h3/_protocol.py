@@ -728,3 +728,8 @@ class RivenH3(QuicConnectionProtocol):
             error_code=error_code,
         )
         self.transmit()
+
+    def send_datagram(self, stream_id: int, data: bytes) -> None:
+        """Write HTTP DATAGRAM and flush immediately."""
+        self._http.send_datagram(stream_id=stream_id, data=data)
+        self.transmit()
