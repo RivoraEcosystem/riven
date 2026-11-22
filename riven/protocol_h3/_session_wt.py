@@ -33,7 +33,7 @@ from rcp.http.events import Headers
 
 from ..exceptions import exceptions
 from ._stream_h3 import build_validate_headers, check_status, construct_pseudo_headers
-from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending, stream_is_unidirectional
+from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending, stream_is_unidirectional , ConnectStreamState, RCPAppState,SessionState , SessionTeardownState
 from .capsules import (
     WT_CLOSE_SESSION,
 )
@@ -44,28 +44,6 @@ if TYPE_CHECKING:
 
 WEBTRANSPORT_UNI_STREAM = 0x54
 WEBTRANSPORT_BIDI_STREAM = 0x41
-
-
-class SessionState(IntEnum):
-    HANDSHAKE_PENDING = 0
-    SESSION_ACCEPTED = 1
-    SESSION_REJECTED = 2
-    SESSION_CLOSING = 3
-    SESSION_CLOSED = 4
-
-
-class ConnectStreamState(IntEnum):
-    CONNECT_STREAM_OPEN = 0
-    CONNECT_STREAM_500 = 1
-    CONNECT_STREAM_ENDED = 2
-    CONNECT_STREAM_RESET = 3
-
-
-class RCPAppState(IntEnum):
-    NOT_RUNNING = 0
-    RUNNING = 1
-    CLOSED_WITH_ERROR = 2
-    CLOSED = 3
 
 
 def webtransport_header_size(
@@ -109,7 +87,7 @@ class WebTransportSessionProtocol:
         "connect_stream_state",
         "rcp_app_state",
         "disconnect_event",
-        "session_teared_down",
+        "session_teardown_state",
         "session_id",
     )
 
@@ -140,7 +118,7 @@ class WebTransportSessionProtocol:
         self.disconnect_event: WebTransportSessionDisconnect | None = None
 
         # status of session teardown after connect stream ending/reset
-        self.session_teared_down: bool = False
+        self.session_teardown_state:SessionTeardownState = SessionTeardownState.NOT_REQUESTED
 
         self.session_id: int | None = None
 
@@ -149,7 +127,7 @@ class WebTransportSessionProtocol:
         Handle WebTransport specific events.
         """
         if self.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
-            if not self.session_teared_down:
+            if self.session_teardown_state == SessionTeardownState.NOT_REQUESTED:
                 # TODO: session teardown logic after CONNECT stream reset or ending
                 ...
 
@@ -157,12 +135,27 @@ class WebTransportSessionProtocol:
 
         if isinstance(event, DataReceived):
             self._buffer += event.data
+
             for capsule in self._http.parse_webtransport_capsule(self):
                 if isinstance(capsule, WT_CLOSE_SESSION):
                     self.close_session(capsule)
+
+            if event.stream_ended:
+                self.connect_stream_state = ConnectStreamState.CONNECT_STREAM_ENDED
+                if self.session_teardown_state == SessionTeardownState.NOT_REQUESTED:
+                    #TODO: session teardown logic
+                    ...
+
         elif isinstance(event, WebTransportStreamDataReceived):
-            if self.rcp_app_state in (RCPAppState.CLOSED_WITH_ERROR, RCPAppState.CLOSED):
+            if self.session_state not in (
+                SessionState.HANDSHAKE_PENDING,
+                SessionState.SESSION_ACCEPTED
+            ) or self.rcp_app_state in (RCPAppState.CLOSED_WITH_ERROR, RCPAppState.CLOSED):
                 self.terminate_wt_stream(stream_id=event.stream_id)
+                # Session reject/closed or RCP app closed teardown session if not started yet
+                if self.session_teardown_state == SessionTeardownState.NOT_REQUESTED:
+                    # TODO: session teardown logic
+                    ...
                 return
 
             try:
@@ -184,6 +177,16 @@ class WebTransportSessionProtocol:
                 )
 
         elif isinstance(event, DatagramReceived):
+            if self.session_state not in (
+                SessionState.HANDSHAKE_PENDING,
+                SessionState.SESSION_ACCEPTED
+            ) or self.rcp_app_state in (RCPAppState.CLOSED_WITH_ERROR, RCPAppState.CLOSED):
+                # Session reject/closed or RCP app closed teardown session if not started yet
+                if self.session_teardown_state == SessionTeardownState.NOT_REQUESTED:
+                    # TODO: session teardown logic
+                    ...
+                return
+
             event: WebTransportDatagramReceived = {
                 "type": WebTransportDatagramEventType.RECEIVED,
                 "data": event.data,
@@ -273,7 +276,7 @@ class WebTransportSessionProtocol:
                 self.send_http_data(stream_id=self.session_id, data=b"", end_stream=True)
 
         finally:
-            if not self.session_teared_down:
+            if self.session_teardown_state == SessionTeardownState.NOT_REQUESTED:
                 # TODO: Session terdown logic after app ending or CONNECT stream end
                 ...
 
@@ -356,7 +359,13 @@ class WebTransportSessionProtocol:
     def reset_stream(self, stream_id: int, error_code: int) -> None:
         self._protocol.reset_stream(stream_id=stream_id, error_code=error_code)
 
+    def send_datagram(self,stream_id:int,data:bytes) -> None:
+        self._protocol.send_datagram(stream_id=stream_id,data=data)
+
     async def receive(self) -> None:
+        if self.rcp_app_state != RCPAppState.RUNNING:
+            raise RuntimeError("RCP application exited unexpectedly.")
+        
         try:
             if self.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
                 return self.disconnect_event
@@ -369,7 +378,13 @@ class WebTransportSessionProtocol:
                 return self.disconnect_event
 
     async def send(self, event: WebtransportSendEvent) -> None | Writer | tuple[Writer, Reader]:
+        
+        if self.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
+            raise RuntimeError("Cannot send events after the CONNECT stream has ended.")
 
+        if self.rcp_app_state != RCPAppState.RUNNING:
+            raise RuntimeError("RCP application exited unexpectedly.")
+                
         if event["type"] == WebTransportConnectionEventType.ACCEPT:
             # application cannot accept session if session is not in handshake pending state
             if self.session_state != SessionState.HANDSHAKE_PENDING:
@@ -410,7 +425,7 @@ class WebTransportSessionProtocol:
 
             headers = construct_pseudo_headers(status)
 
-            self.send_http_headers(stream_id=self.session_id, headers=headers)
+            self.send_http_headers(stream_id=self.session_id, headers=headers,end_stream=True)
             self.session_state = SessionState.SESSION_REJECTED
             return
 
@@ -461,7 +476,7 @@ class WebTransportSessionProtocol:
             if not isinstance(data, bytes):
                 raise exceptions.InvalidEventField(field="data", got=type(data), expected=bytes)
 
-            self._http.send_datagram(stream_id=self.session_id, data=data)
+            self.send_datagram(stream_id=self.session_id, data=data)
             return
 
         elif event["type"] == WebTransportUnidirectionalStreamEventType.SERVER:

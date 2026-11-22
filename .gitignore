@@ -19,3 +19,5 @@ tests/
 riven.egg-info/
 dist/
 build/
+
+draft.md
