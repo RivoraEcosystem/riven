@@ -5,7 +5,6 @@ import contextlib
 import logging
 from asyncio import Queue, QueueShutDown
 from collections.abc import Generator
-from enum import IntEnum
 from typing import TYPE_CHECKING
 
 from aioquic.buffer import size_uint_var
@@ -33,7 +32,16 @@ from rcp.http.events import Headers
 
 from ..exceptions import exceptions
 from ._stream_h3 import build_validate_headers, check_status, construct_pseudo_headers
-from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending, stream_is_unidirectional , ConnectStreamState, RCPAppState,SessionState , SessionTeardownState
+from ._stream_wt import (
+    ConnectStreamState,
+    RCPAppState,
+    SessionState,
+    SessionTeardownState,
+    WebTransportStream,
+    can_reset_stream,
+    can_stop_sending,
+    stream_is_unidirectional,
+)
 from .capsules import (
     WT_CLOSE_SESSION,
 )
@@ -118,7 +126,7 @@ class WebTransportSessionProtocol:
         self.disconnect_event: WebTransportSessionDisconnect | None = None
 
         # status of session teardown after connect stream ending/reset
-        self.session_teardown_state:SessionTeardownState = SessionTeardownState.NOT_REQUESTED
+        self.session_teardown_state: SessionTeardownState = SessionTeardownState.NOT_REQUESTED
 
         self.session_id: int | None = None
 
@@ -143,13 +151,13 @@ class WebTransportSessionProtocol:
             if event.stream_ended:
                 self.connect_stream_state = ConnectStreamState.CONNECT_STREAM_ENDED
                 if self.session_teardown_state == SessionTeardownState.NOT_REQUESTED:
-                    #TODO: session teardown logic
+                    # TODO: session teardown logic
                     ...
 
         elif isinstance(event, WebTransportStreamDataReceived):
             if self.session_state not in (
                 SessionState.HANDSHAKE_PENDING,
-                SessionState.SESSION_ACCEPTED
+                SessionState.SESSION_ACCEPTED,
             ) or self.rcp_app_state in (RCPAppState.CLOSED_WITH_ERROR, RCPAppState.CLOSED):
                 self.terminate_wt_stream(stream_id=event.stream_id)
                 # Session reject/closed or RCP app closed teardown session if not started yet
@@ -179,7 +187,7 @@ class WebTransportSessionProtocol:
         elif isinstance(event, DatagramReceived):
             if self.session_state not in (
                 SessionState.HANDSHAKE_PENDING,
-                SessionState.SESSION_ACCEPTED
+                SessionState.SESSION_ACCEPTED,
             ) or self.rcp_app_state in (RCPAppState.CLOSED_WITH_ERROR, RCPAppState.CLOSED):
                 # Session reject/closed or RCP app closed teardown session if not started yet
                 if self.session_teardown_state == SessionTeardownState.NOT_REQUESTED:
@@ -246,7 +254,10 @@ class WebTransportSessionProtocol:
         try:
             result = await app(self.scope, self.receive, self.send)
 
-        except Exception as exc:
+        except exceptions.ClientDisconnected:
+            pass
+
+        except BaseException as exc:
             msg = "Exception in RCP application\n"
             protocol_logger.error(msg, exc_info=exc)
             # session handshake still pending send 500 response
@@ -359,13 +370,13 @@ class WebTransportSessionProtocol:
     def reset_stream(self, stream_id: int, error_code: int) -> None:
         self._protocol.reset_stream(stream_id=stream_id, error_code=error_code)
 
-    def send_datagram(self,stream_id:int,data:bytes) -> None:
-        self._protocol.send_datagram(stream_id=stream_id,data=data)
+    def send_datagram(self, stream_id: int, data: bytes) -> None:
+        self._protocol.send_datagram(stream_id=stream_id, data=data)
 
     async def receive(self) -> None:
         if self.rcp_app_state != RCPAppState.RUNNING:
             raise RuntimeError("RCP application exited unexpectedly.")
-        
+
         try:
             if self.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
                 return self.disconnect_event
@@ -378,13 +389,13 @@ class WebTransportSessionProtocol:
                 return self.disconnect_event
 
     async def send(self, event: WebtransportSendEvent) -> None | Writer | tuple[Writer, Reader]:
-        
+
         if self.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
-            raise RuntimeError("Cannot send events after the CONNECT stream has ended.")
+            raise exceptions.ClientDisconnected
 
         if self.rcp_app_state != RCPAppState.RUNNING:
             raise RuntimeError("RCP application exited unexpectedly.")
-                
+
         if event["type"] == WebTransportConnectionEventType.ACCEPT:
             # application cannot accept session if session is not in handshake pending state
             if self.session_state != SessionState.HANDSHAKE_PENDING:
@@ -425,7 +436,7 @@ class WebTransportSessionProtocol:
 
             headers = construct_pseudo_headers(status)
 
-            self.send_http_headers(stream_id=self.session_id, headers=headers,end_stream=True)
+            self.send_http_headers(stream_id=self.session_id, headers=headers, end_stream=True)
             self.session_state = SessionState.SESSION_REJECTED
             return
 

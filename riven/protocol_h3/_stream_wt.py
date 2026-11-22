@@ -24,12 +24,14 @@ from rcp import (
 if TYPE_CHECKING:
     from ._session_wt import WebTransportSessionProtocol
 
+from enum import IntEnum
+
 from ..exceptions import exceptions
 from .error import (
     WebTransportApplicationErrorCode,
     encode_app_error,
 )
-from enum import IntEnum
+
 
 class SessionState(IntEnum):
     HANDSHAKE_PENDING = 0
@@ -51,6 +53,7 @@ class RCPAppState(IntEnum):
     RUNNING = 1
     CLOSED_WITH_ERROR = 2
     CLOSED = 3
+
 
 class SessionTeardownState(IntEnum):
     NOT_REQUESTED = 0
@@ -129,7 +132,7 @@ class StreamReader(Reader):
         self._closed = True
         self.wake_all_waiters()
         if self.stream.protocol.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
-            return # connect stream closed return immediately
+            return  # connect stream closed return immediately
         self.stream.protocol.stop_stream(
             stream_id=self.stream.stream_id,
             error_code=encode_app_error(WebTransportApplicationErrorCode.WT_APP_STOP_SENDING_BY_APPLICATION),
@@ -156,10 +159,10 @@ class StreamWriter(Writer):
 
     async def write(self, event: WebTransportStreamWriteEvent) -> None:
         if (
-            self.is_closed or 
-            self.stream.protocol.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN
+            self.is_closed
+            or self.stream.protocol.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN
         ):
-            raise RuntimeError("Cannot write on a closed stream")
+            raise exceptions.ClientDisconnected
 
         if self.stream.protocol.rcp_app_state != RCPAppState.RUNNING:
             raise RuntimeError("RCP Application not running")
@@ -191,7 +194,7 @@ class StreamWriter(Writer):
         self._closed = True
         self.stream._consume_buffer()  # consume remaining data in buffer
         if self.stream.protocol.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
-            return # connect stream closed return immediately
+            return  # connect stream closed return immediately
         self.stream.protocol.send_quic_stream_data(stream_id=self.stream.stream_id, data=b"", end_stream=True)
 
 

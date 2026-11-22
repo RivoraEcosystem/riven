@@ -154,7 +154,9 @@ class InvalidStatusCode(RivenException):
         super().__init__(*args)
 
 
-class ClientDisconnected(RivenException):
+class ClientDisconnected(OSError):
+    """Raised when the application calls the send callable after the client has disconnected."""
+
     pass
 
 

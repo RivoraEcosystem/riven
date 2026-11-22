@@ -240,7 +240,10 @@ class HTTP3Stream:
         try:
             result = await app(self.scope, self.receive, self.send)
 
-        except Exception as exc:
+        except exceptions.ClientDisconnected:
+            pass
+
+        except BaseException as exc:
             msg = "Exception in RCP application\n"
             protocol_logger.error(msg, exc_info=exc)
             if not self._response_started:
@@ -304,14 +307,11 @@ class HTTP3Stream:
     async def send(self, event: RCPSendEvent):
         "Send function for RCPApplication which parses events and handle that event forward data accordingly"
 
-        if self._protocol._disconnected:
-            return
+        if self._closed or self._protocol._disconnected:
+            raise exceptions.ClientDisconnected
 
         if self._response_complete:  # response already completed
             raise RuntimeError("RCP Violation - Unexpected RCP event response already completed.")
-
-        if self._closed:
-            raise RuntimeError("RCP Violation - Unexpected RCP Event stream closed.")
 
         if event["type"] == HTTPResponseEventType.START:
             event: HTTPResponseStartEvent = event
