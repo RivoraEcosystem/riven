@@ -28,7 +28,7 @@ jobs:
       - name: Ruff format check
         run: ruff format --check riven .github/scripts
       - name: Codespell
-        run: codespell riven README.md pyproject.toml MANIFEST.in requirements/ci.txt .github/workflows/quality.yml .github/release-files.json .github/scripts/check_release_contents.py
+        run: codespell riven README.md CHANGELOG.md pyproject.toml MANIFEST.in requirements/ci.txt .github/workflows/ci.yml .github/release-files.json .github/scripts/check_release_contents.py
       - name: Pylint import and circular import checks
         run: pylint --disable=all --enable=E0401,E0402,E0611,R0401 --ignored-modules=uvloop,winloop riven
       - name: Check source distribution manifest
