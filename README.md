@@ -128,18 +128,16 @@ Riven currently supports HTTP/3 only. Until additional HTTP protocols are suppor
 
 ## Contributions
 
-Riven is currently in active development, and its architecture may continue to evolve as the project progresses.
+Riven is in active development, and contributions are welcome. See the [contribution guide](CONTRIBUTING.md) for development setup and contribution instructions, and the [AI contribution policy](AI_POLICY.md) if you use AI tools.
 
-If you are interested in contributing, feel free to reach out first so I can share the current areas where contributions would be most useful.
+## Developer Contact
+
+Use [GitHub Issues](https://github.com/RivoraEcosystem/riven/issues) and [Discussions](https://github.com/RivoraEcosystem/riven/discussions) for public project questions, bug reports, feature ideas, updates, and suggestions so others can follow and contribute.
 
 * [LinkedIn](https://www.linkedin.com/in/bhavya-malhotra-7265513b1/)
 * [Email: contact@bhavyamalhotra.in](mailto:contact@bhavyamalhotra.in)
 
-You can also [open an issue](https://github.com/RivoraEcosystem/riven/issues) or start a [discussion](https://github.com/RivoraEcosystem/riven/discussions) if you have an idea, question, bug report, or technical suggestion.
-
-## Discussions
-
-Ideas, architecture questions, and technical discussions are welcome in the repository's [Discussions](https://github.com/RivoraEcosystem/riven/discussions).
+Email the developer directly for private questions about ongoing development or contributor coordination that should not be discussed publicly. Please do not use direct contact for duplicate reports, unnecessary queries, or spam emails or messages.
 
 ## License
 
