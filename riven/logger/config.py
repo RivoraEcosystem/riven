@@ -15,6 +15,8 @@ from .constants import (
     DEFAULT_LOG_FORMAT,
     LIFECYCLE_LOGGER_NAME,
     LOGGER_NAME,
+    NETWORK_LOGGER_NAME,
+    NETWORK_LOG_LEVEL,
     PROTOCOL_LOGGER_NAME,
 )
 
@@ -32,6 +34,11 @@ LOGGING_CONFIG: dict[str, Any] = {
             "fmt": DEFAULT_ACCESS_LOG_FORMAT,
             "use_colors": None,
         },
+        "network": {
+            "()": "riven.logger.formatter.DefaultFormatter",
+            "fmt": DEFAULT_LOG_FORMAT,
+            "use_colors": None,
+        },
     },
     "handlers": {
         "default": {
@@ -43,6 +50,11 @@ LOGGING_CONFIG: dict[str, Any] = {
             "class": "logging.StreamHandler",
             "formatter": "access",
             "stream": "ext://sys.stdout",
+        },
+        "network": {
+            "class": "logging.StreamHandler",
+            "formatter": "network",
+            "stream": "ext://sys.stderr",
         },
     },
     "loggers": {
@@ -59,6 +71,11 @@ LOGGING_CONFIG: dict[str, Any] = {
         PROTOCOL_LOGGER_NAME: {
             "handlers": ["default"],
             "level": "INFO",
+            "propagate": False,
+        },
+        NETWORK_LOGGER_NAME: {
+            "handlers": ["network"],
+            "level": NETWORK_LOG_LEVEL,
             "propagate": False,
         },
         LIFECYCLE_LOGGER_NAME: {
