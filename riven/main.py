@@ -12,9 +12,9 @@ from riven._config import (
     APPLICATION_INTERFACE_SPEC,
     LIFESPAN_CLASS,
     LOG_LEVELS,
-    NETWORK_LOG_LEVELS,
     LOOP_FACTORIES,
     LOOP_FACTORY_TYPE,
+    NETWORK_LOG_LEVELS,
     RivenConfig,
 )
 from riven.server import RivenServer

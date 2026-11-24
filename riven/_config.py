@@ -11,7 +11,7 @@ from typing import Any, Literal, get_args
 from rcp import H3_FORBIDDEN_HEADERS, RCPApplication
 
 from .logger import LOGGING_CONFIG
-from .logger.constants import NETWORK_LOGGER_NAME, NETWORK_LOG_LEVEL
+from .logger.constants import NETWORK_LOG_LEVEL, NETWORK_LOGGER_NAME
 
 LOG_LEVELS: dict[str, int] = {
     "critical": logging.CRITICAL,

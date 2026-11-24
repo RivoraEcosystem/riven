@@ -27,7 +27,7 @@ from rcp.http.events import Headers
 
 from .._config import APPLICATION_INTERFACE_SPEC, RivenConfig
 from ..exceptions import exceptions
-from ..logger.constants import NETWORK_LOGGER_NAME, NETWORK_LOG_LEVEL
+from ..logger.constants import NETWORK_LOG_LEVEL, NETWORK_LOGGER_NAME
 from ._session_wt import WebTransportSessionProtocol, get_webtransport_stream_header_size
 from ._stream_h3 import ConnectionInfo, HTTP3Stream
 from ._stream_wt import WebTransportStream, can_reset_stream, can_stop_sending
@@ -451,14 +451,18 @@ class RivenH3(QuicConnectionProtocol):
             self.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_MESSAGE_ERROR)
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Malformed HTTP/3 request received on stream %d", event.stream_id, exc_info=err
+                "Malformed HTTP/3 request received on stream %d",
+                event.stream_id,
+                exc_info=err,
             )
 
         except exceptions.InvalidEvent as err:
             self.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR)
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Malformed HTTP/3 request received on stream %d", event.stream_id, exc_info=err
+                "Malformed HTTP/3 request received on stream %d",
+                event.stream_id,
+                exc_info=err,
             )
 
         except exceptions.UnsupportedMethod as err:
@@ -528,7 +532,9 @@ class RivenH3(QuicConnectionProtocol):
         except (exceptions.InvalidEvent, exceptions.InvalidStream) as err:
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Failed to handle HTTP/3 stream interrupt for stream %d", event.stream_id, exc_info=err
+                "Failed to handle HTTP/3 stream interrupt for stream %d",
+                event.stream_id,
+                exc_info=err,
             )
 
     @staticmethod
