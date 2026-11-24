@@ -139,8 +139,9 @@ class RivenH3(QuicConnectionProtocol):
                             network_logger.log(
                                 NETWORK_LOG_LEVEL,
                                 "Failed to handle HTTP/3 DataReceived event for stream %d - "
-                                "Stream Closed By Application",
+                                "Stream Closed By Application (client %s)",
                                 http_event.stream_id,
+                                self._client_address(),
                             )
                             return
 
@@ -159,9 +160,10 @@ class RivenH3(QuicConnectionProtocol):
                         network_logger.log(
                             NETWORK_LOG_LEVEL,
                             "Failed to handle HTTP/3 DataReceived event for stream %d "
-                            "- Invalid Stream Type %s",
+                            "- Invalid Stream Type %s (client %s)",
                             http_event.stream_id,
                             type(stream).__name__ if stream is not None else "None",
+                            self._client_address(),
                         )
                         self.remove_stream(http_event.stream_id, self)
                 elif isinstance(http_event, WebTransportStreamDataReceived):
@@ -194,9 +196,10 @@ class RivenH3(QuicConnectionProtocol):
                         network_logger.log(
                             NETWORK_LOG_LEVEL,
                             "Failed to handle WebTransportStreamDataReceived event for session %d "
-                            "- Invalid Session Type %s",
+                            "- Invalid Session Type %s (client %s)",
                             http_event.session_id,
                             type(session).__name__ if session is not None else "None",
+                            self._client_address(),
                         )
                         # TODO: session teardown logic after session level error
 
@@ -451,8 +454,9 @@ class RivenH3(QuicConnectionProtocol):
             self.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_MESSAGE_ERROR)
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Malformed HTTP/3 request received on stream %d",
+                "Malformed HTTP/3 request received on stream %d from client %s",
                 event.stream_id,
+                self._client_address(),
                 exc_info=err,
             )
 
@@ -460,8 +464,9 @@ class RivenH3(QuicConnectionProtocol):
             self.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR)
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Malformed HTTP/3 request received on stream %d",
+                "Malformed HTTP/3 request received on stream %d from client %s",
                 event.stream_id,
+                self._client_address(),
                 exc_info=err,
             )
 
@@ -532,10 +537,16 @@ class RivenH3(QuicConnectionProtocol):
         except (exceptions.InvalidEvent, exceptions.InvalidStream) as err:
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Failed to handle HTTP/3 stream interrupt for stream %d",
+                "Failed to handle HTTP/3 stream interrupt for stream %d from client %s",
                 event.stream_id,
+                self._client_address(),
                 exc_info=err,
             )
+
+    def _client_address(self) -> str:
+        """Return the peer address for network diagnostic logs."""
+        network_paths = self._quic._network_paths
+        return str(network_paths[0].addr) if network_paths else "unknown"
 
     @staticmethod
     def header_list_size(headers):
