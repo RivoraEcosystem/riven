@@ -15,6 +15,19 @@ ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = ROOT / ".github" / "release-files.json"
 
 
+def report_result(matches: bool) -> int:
+    message = (
+        "Release artifact contents match .github/release-files.json"
+        if matches
+        else "Release artifact contents mismatch .github/release-files.json"
+    )
+    if sys.stdout.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb":
+        color = "\033[32m" if matches else "\033[31m"
+        message = f"{color}{message}\033[0m"
+    print(message, flush=True)
+    return 0 if matches else 1
+
+
 def report_difference(label: str, expected: set[str], actual: set[str]) -> bool:
     extra = sorted(actual - expected)
     missing = sorted(expected - actual)
@@ -111,7 +124,7 @@ def main() -> int:
             f"Release tag {release_tag!r} does not match package version tag {expected_tag!r}",
             file=sys.stderr,
         )
-        return 1
+        return report_result(False)
 
     wheel_name = f"{normalized_name}-{version}-py3-none-any.whl"
     sdist_name = f"{normalized_name}-{version}.tar.gz"
@@ -119,7 +132,7 @@ def main() -> int:
         entries = list(args.dist_dir.iterdir())
     except OSError as exc:
         print(f"Cannot read distribution directory {args.dist_dir}: {exc}", file=sys.stderr)
-        return 1
+        return report_result(False)
     expected_artifacts = {wheel_name, sdist_name}
     dist_files = {path.name for path in entries}
     regular_files = all(path.is_file() and not path.is_symlink() for path in entries)
@@ -127,7 +140,7 @@ def main() -> int:
         report_difference("distribution artifacts", expected_artifacts, dist_files)
         if not regular_files:
             print("Distribution directory may contain only regular files", file=sys.stderr)
-        return 1
+        return report_result(False)
 
     allowlist = json.loads(ALLOWLIST.read_text(encoding="utf-8"))
     dist_info = f"{normalized_name}-{version}.dist-info"
@@ -137,9 +150,8 @@ def main() -> int:
     wheel_ok = check_wheel(args.dist_dir / wheel_name, wheel_allowed)
     sdist_ok = check_sdist(args.dist_dir / sdist_name, sdist_allowed, f"{normalized_name}-{version}")
     if wheel_ok and sdist_ok:
-        print("Release artifact contents match .github/release-files.json")
-        return 0
-    return 1
+        return report_result(True)
+    return report_result(False)
 
 
 if __name__ == "__main__":
