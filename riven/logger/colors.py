@@ -10,6 +10,8 @@ from enum import StrEnum
 from http import HTTPStatus
 from typing import TextIO
 
+from .constants import NETWORK_LOG_LEVEL
+
 __all__ = (
     "ANSIColor",
     "supports_color",
@@ -59,6 +61,7 @@ _LEVEL_COLORS: dict[int, ANSIColor] = {
     logging.WARNING: ANSIColor.YELLOW,
     logging.ERROR: ANSIColor.RED,
     logging.CRITICAL: ANSIColor.BRIGHT_RED,
+    NETWORK_LOG_LEVEL: ANSIColor.BRIGHT_BLUE,
 }
 
 
