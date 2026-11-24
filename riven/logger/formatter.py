@@ -19,7 +19,7 @@ from .colors import (
 
 class DefaultFormatter(logging.Formatter):
     """
-    Default formatter used for server logs.
+    Default formatter used for server logs
     """
 
     def __init__(
