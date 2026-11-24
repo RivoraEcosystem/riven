@@ -546,7 +546,17 @@ class RivenH3(QuicConnectionProtocol):
     def _client_address(self) -> str:
         """Return the peer address for network diagnostic logs."""
         network_paths = self._quic._network_paths
-        return str(network_paths[0].addr) if network_paths else "unknown"
+        if not network_paths:
+            return "unknown"
+
+        address = network_paths[0].addr
+        if isinstance(address, tuple) and len(address) >= 2:
+            host, port = str(address[0]), address[1]
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            return f"{host}:{port}"
+
+        return str(address)
 
     @staticmethod
     def header_list_size(headers):
