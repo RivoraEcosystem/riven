@@ -34,11 +34,6 @@ LOGGING_CONFIG: dict[str, Any] = {
             "fmt": DEFAULT_ACCESS_LOG_FORMAT,
             "use_colors": None,
         },
-        "network": {
-            "()": "riven.logger.formatter.DefaultFormatter",
-            "fmt": DEFAULT_LOG_FORMAT,
-            "use_colors": None,
-        },
     },
     "handlers": {
         "default": {
@@ -50,11 +45,6 @@ LOGGING_CONFIG: dict[str, Any] = {
             "class": "logging.StreamHandler",
             "formatter": "access",
             "stream": "ext://sys.stdout",
-        },
-        "network": {
-            "class": "logging.StreamHandler",
-            "formatter": "network",
-            "stream": "ext://sys.stderr",
         },
     },
     "loggers": {
@@ -74,7 +64,7 @@ LOGGING_CONFIG: dict[str, Any] = {
             "propagate": False,
         },
         NETWORK_LOGGER_NAME: {
-            "handlers": ["network"],
+            "handlers": ["default"],
             "level": NETWORK_LOG_LEVEL,
             "propagate": False,
         },

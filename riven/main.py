@@ -118,7 +118,10 @@ def echo_version(ctx: click.Context, param: click.Parameter, value: bool) -> Non
     "--network-log-level",
     type=NETWORK_LOG_CHOICES,
     default="network",
-    help="Network diagnostic log level. [default: network]",
+    help=(
+        "Minimum level for network diagnostics. Network records use NETWORK; levels above NETWORK "
+        "suppress them. [default: network]"
+    ),
     show_default=True,
 )
 @click.option(

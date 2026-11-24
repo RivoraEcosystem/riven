@@ -158,8 +158,6 @@ class RivenConfig:
                 if self.use_colors in (True, False):
                     self.log_config["formatters"]["default"]["use_colors"] = self.use_colors
                     self.log_config["formatters"]["access"]["use_colors"] = self.use_colors
-                    if "network" in self.log_config["formatters"]:
-                        self.log_config["formatters"]["network"]["use_colors"] = self.use_colors
 
                 logging.config.dictConfig(self.log_config)
 
