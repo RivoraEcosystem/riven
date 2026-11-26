@@ -139,7 +139,7 @@ class RivenH3(QuicConnectionProtocol):
                             network_logger.log(
                                 NETWORK_LOG_LEVEL,
                                 "Failed to handle HTTP/3 DataReceived event for stream %d - "
-                                "Stream Closed By Application (client %s)",
+                                "Stream Closed By Application (client IP:PORT %s)",
                                 http_event.stream_id,
                                 self._client_address(),
                             )
@@ -160,7 +160,7 @@ class RivenH3(QuicConnectionProtocol):
                         network_logger.log(
                             NETWORK_LOG_LEVEL,
                             "Failed to handle HTTP/3 DataReceived event for stream %d "
-                            "- Invalid Stream Type %s (client %s)",
+                            "- Invalid Stream Type %s (client IP:PORT %s)",
                             http_event.stream_id,
                             type(stream).__name__ if stream is not None else "None",
                             self._client_address(),
@@ -196,7 +196,7 @@ class RivenH3(QuicConnectionProtocol):
                         network_logger.log(
                             NETWORK_LOG_LEVEL,
                             "Failed to handle WebTransportStreamDataReceived event for session %d "
-                            "- Invalid Session Type %s (client %s)",
+                            "- Invalid Session Type %s (client IP:PORT %s)",
                             http_event.session_id,
                             type(session).__name__ if session is not None else "None",
                             self._client_address(),
@@ -454,7 +454,7 @@ class RivenH3(QuicConnectionProtocol):
             self.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_MESSAGE_ERROR)
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Malformed HTTP/3 request received on stream %d from client %s",
+                "Malformed HTTP/3 request received on stream %d from client IP:PORT %s",
                 event.stream_id,
                 self._client_address(),
                 exc_info=err,
@@ -464,7 +464,7 @@ class RivenH3(QuicConnectionProtocol):
             self.reset_stream(stream_id=event.stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR)
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Malformed HTTP/3 request received on stream %d from client %s",
+                "Malformed HTTP/3 request received on stream %d from client IP:PORT %s",
                 event.stream_id,
                 self._client_address(),
                 exc_info=err,
@@ -484,7 +484,7 @@ class RivenH3(QuicConnectionProtocol):
             network_logger.log(
                 NETWORK_LOG_LEVEL,
                 "WebTransport CONNECT request received on stream %d "
-                "please enable WebTransport using --enable-webtransport (client %s)",
+                "please enable WebTransport using --enable-webtransport (client IP:PORT %s)",
                 event.stream_id,
                 self._client_address(),
                 exc_info=err,
@@ -506,7 +506,8 @@ class RivenH3(QuicConnectionProtocol):
                 except Exception as e:
                     network_logger.log(
                         NETWORK_LOG_LEVEL,
-                        "Exception while closing stream %d after connection termination for client %s",
+                        "Exception while closing stream %d after connection termination "
+                        "for client IP:PORT %s",
                         stream.stream_id,
                         self._client_address(),
                         exc_info=e,
@@ -517,7 +518,7 @@ class RivenH3(QuicConnectionProtocol):
         except exceptions.InvalidEvent as err:
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Failed to handle connection termination for client %s",
+                "Failed to handle connection termination for client IP:PORT %s",
                 self._client_address(),
                 exc_info=err,
             )
@@ -543,7 +544,7 @@ class RivenH3(QuicConnectionProtocol):
         except (exceptions.InvalidEvent, exceptions.InvalidStream) as err:
             network_logger.log(
                 NETWORK_LOG_LEVEL,
-                "Failed to handle HTTP/3 stream interrupt for stream %d from client %s",
+                "Failed to handle HTTP/3 stream interrupt for stream %d from client IP:PORT %s",
                 event.stream_id,
                 self._client_address(),
                 exc_info=err,
