@@ -15,6 +15,8 @@ from .constants import (
     DEFAULT_LOG_FORMAT,
     LIFECYCLE_LOGGER_NAME,
     LOGGER_NAME,
+    NETWORK_LOG_LEVEL,
+    NETWORK_LOGGER_NAME,
     PROTOCOL_LOGGER_NAME,
 )
 
@@ -59,6 +61,11 @@ LOGGING_CONFIG: dict[str, Any] = {
         PROTOCOL_LOGGER_NAME: {
             "handlers": ["default"],
             "level": "INFO",
+            "propagate": False,
+        },
+        NETWORK_LOGGER_NAME: {
+            "handlers": ["default"],
+            "level": NETWORK_LOG_LEVEL,
             "propagate": False,
         },
         LIFECYCLE_LOGGER_NAME: {

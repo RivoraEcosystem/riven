@@ -14,6 +14,7 @@ from riven._config import (
     LOG_LEVELS,
     LOOP_FACTORIES,
     LOOP_FACTORY_TYPE,
+    NETWORK_LOG_LEVELS,
     RivenConfig,
 )
 from riven.server import RivenServer
@@ -21,6 +22,7 @@ from riven.server import RivenServer
 from ._version import __version__
 
 LOG_CHOICES = click.Choice(list(LOG_LEVELS.keys()))
+NETWORK_LOG_CHOICES = click.Choice(list(NETWORK_LOG_LEVELS.keys()))
 APPLICATION_INTERFACE_CHOICES = click.Choice(list(APPLICATION_INTERFACE_SPEC.keys()))
 LIFESPAN_CHOICES = click.Choice(list(LIFESPAN_CLASS.keys()))
 LOOP_CHOICES = click.Choice(list(LOOP_FACTORIES.keys()))
@@ -113,6 +115,16 @@ def echo_version(ctx: click.Context, param: click.Parameter, value: bool) -> Non
     show_default=True,
 )
 @click.option(
+    "--network-log-level",
+    type=NETWORK_LOG_CHOICES,
+    default="network",
+    help=(
+        "Minimum level for network diagnostics. Network records use NETWORK; levels above NETWORK "
+        "suppress them. [default: network]"
+    ),
+    show_default=True,
+)
+@click.option(
     "--application-interface",
     type=APPLICATION_INTERFACE_CHOICES,
     default="rcp",
@@ -174,6 +186,7 @@ def main(
     access_log: bool,
     use_colors: bool,
     log_level: str,
+    network_log_level: str,
     application_interface: str,
     factory: bool,
     lifespan: str,
@@ -195,6 +208,7 @@ def main(
         access_log=access_log,
         use_colors=use_colors,
         log_level=log_level,
+        network_log_level=network_log_level,
         application_interface=application_interface,
         factory=factory,
         lifespan=lifespan,
@@ -225,6 +239,7 @@ def run(
     loop: LOOP_FACTORY_TYPE | str = "auto",
     shutdown_timeout: int = 5,
     enable_webtransport: bool = True,
+    network_log_level: str | int = "network",
 ):
     config = RivenConfig(
         app=app,
@@ -246,6 +261,7 @@ def run(
         loop=loop,
         shutdown_timeout=shutdown_timeout,
         enable_webtransport=enable_webtransport,
+        network_log_level=network_log_level,
     )
 
     config.import_app()

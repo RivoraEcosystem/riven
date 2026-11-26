@@ -11,6 +11,7 @@ from typing import Any, Literal, get_args
 from rcp import H3_FORBIDDEN_HEADERS, RCPApplication
 
 from .logger import LOGGING_CONFIG
+from .logger.constants import NETWORK_LOG_LEVEL, NETWORK_LOGGER_NAME
 
 LOG_LEVELS: dict[str, int] = {
     "critical": logging.CRITICAL,
@@ -19,6 +20,8 @@ LOG_LEVELS: dict[str, int] = {
     "info": logging.INFO,
     "debug": logging.DEBUG,
 }
+
+NETWORK_LOG_LEVELS = {**LOG_LEVELS, "network": NETWORK_LOG_LEVEL}
 
 APPLICATION_INTERFACE_SPEC: dict[str, dict[str, str]] = {
     "asgi": {"version": "3.0", "spec_version": "2.4"},
@@ -66,6 +69,7 @@ class RivenConfig:
         "access_log",
         "use_colors",
         "log_level",
+        "network_log_level",
         "application_interface",
         "app_factory",
         "lifespan",
@@ -100,6 +104,7 @@ class RivenConfig:
         loop: LOOP_FACTORY_TYPE | str = "auto",
         shutdown_timeout: int = 5,
         enable_webtransport: bool = True,
+        network_log_level: str | int = NETWORK_LOG_LEVEL,
     ):
         self.app = app
         self.host = host
@@ -116,6 +121,7 @@ class RivenConfig:
         self.use_colors = use_colors
         self.application_interface = application_interface
         self.log_level = log_level
+        self.network_log_level = network_log_level
         self.app_factory = app_factory
         self.lifespan = lifespan
         self.loop = loop
@@ -179,6 +185,15 @@ class RivenConfig:
         if self.access_log is False:
             logging.getLogger("riven.access").handlers = []
             logging.getLogger("riven.access").propagate = False
+
+        if isinstance(self.network_log_level, str):
+            network_log_level = NETWORK_LOG_LEVELS.get(self.network_log_level.lower())
+            if network_log_level is None:
+                logger.error("Invalid NETWORK LOG LEVEL %s", self.network_log_level)
+                network_log_level = NETWORK_LOG_LEVEL
+        else:
+            network_log_level = self.network_log_level
+        logging.getLogger(NETWORK_LOGGER_NAME).setLevel(network_log_level)
 
     def get_loop_factory(self) -> Callable[[], asyncio.AbstractEventLoop] | None:
         if self.loop in LOOP_FACTORIES:
