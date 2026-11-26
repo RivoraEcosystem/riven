@@ -481,11 +481,12 @@ class RivenH3(QuicConnectionProtocol):
                 ],
                 end_stream=True,  # Smooth termination of response
             )
-            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
-            protocol_logger.error(
+            network_logger.log(
+                NETWORK_LOG_LEVEL,
                 "WebTransport CONNECT request received on stream %d "
-                "please enable WebTransport using --enable-webtransport",
+                "please enable WebTransport using --enable-webtransport (client %s)",
                 event.stream_id,
+                self._client_address(),
                 exc_info=err,
             )
 
@@ -503,18 +504,23 @@ class RivenH3(QuicConnectionProtocol):
 
                     stream.close()
                 except Exception as e:
-                    # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
-                    protocol_logger.error(
-                        "Exception while closing stream %d after connection termination",
+                    network_logger.log(
+                        NETWORK_LOG_LEVEL,
+                        "Exception while closing stream %d after connection termination for client %s",
                         stream.stream_id,
+                        self._client_address(),
                         exc_info=e,
                     )
                     continue
 
             self.server_state.remove_connection(self)  # remove connection from server state
         except exceptions.InvalidEvent as err:
-            # FIXME: log IP:PORT along with stream_id(see rivoraecosystem/riven#11)
-            protocol_logger.error("Failed to handle connection termination", exc_info=err)
+            network_logger.log(
+                NETWORK_LOG_LEVEL,
+                "Failed to handle connection termination for client %s",
+                self._client_address(),
+                exc_info=err,
+            )
 
     def _handle_stream_interrupt(self, event: StopSendingReceived | StreamReset):
         # FIXME: handle stop sending and stream reset logic separately
