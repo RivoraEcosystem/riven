@@ -523,7 +523,6 @@ class RivenH3(QuicConnectionProtocol):
             )
 
     def _handle_stream_interrupt(self, event: StopSendingReceived | StreamReset):
-        # FIXME: handle stop sending and stream reset logic separately
         try:
             if not isinstance(event, (StreamReset, StopSendingReceived)):
                 raise exceptions.InvalidEvent(event)
@@ -537,8 +536,13 @@ class RivenH3(QuicConnectionProtocol):
             if not isinstance(stream, HTTP3Stream):
                 raise exceptions.InvalidStream(stream, HTTP3Stream)
 
-            stream.close()
-            stream._stream_reset = True
+            if isinstance(event, StopSendingReceived):
+                # The peer stopped receiving the response; it may still be sending the request body.
+                stream._stream_reset = True
+            else:
+                # The peer reset the request direction, so stop delivering its body to the application.
+                stream.close()
+                stream._stream_reset = True
 
         except (exceptions.InvalidEvent, exceptions.InvalidStream) as err:
             network_logger.log(
