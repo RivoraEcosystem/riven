@@ -217,7 +217,7 @@ class WebTransportSessionProtocol:
 
         if stream is None:
             stream = WebTransportStream(stream_id=stream_id, session_id=self.session_id, protocol=self)
-            self._protocol._active_streams_sessions[stream_id] = stream
+            self._protocol.add_stream_session(stream=stream,stream_id=stream_id)
             self._wt_stream_created(stream_id)
 
         elif not isinstance(stream, WebTransportStream):

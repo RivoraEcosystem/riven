@@ -106,6 +106,12 @@ class RivenH3(QuicConnectionProtocol):
         # highest value of seen streamID
         self.highest_seen_stream_id: int = 0
 
+    def add_stream_session(self,stream:Stream|WebTransportSessionProtocol,stream_id:int) -> None:
+        self._active_streams_sessions[stream_id] = stream
+
+    def get_stream_session(self,stream_id:int) -> Stream|WebTransportSessionProtocol:
+        return self._active_streams_sessions[stream_id]
+
     def quic_event_received(self, event):
         if isinstance(event, ProtocolNegotiated):
             if event.alpn_protocol == H3_ALPN[0]:  # confirm HTTP3
@@ -128,7 +134,7 @@ class RivenH3(QuicConnectionProtocol):
 
                     self._create_stream(event=http_event)
                 elif isinstance(http_event, DataReceived):
-                    stream = self._active_streams_sessions.get(http_event.stream_id)
+                    stream = self.get_stream_session(http_event.stream_id)
 
                     if isinstance(stream, HTTP3Stream):
                         if stream._closed:
@@ -167,7 +173,7 @@ class RivenH3(QuicConnectionProtocol):
                         )
                         self.remove_stream(http_event.stream_id, self)
                 elif isinstance(http_event, WebTransportStreamDataReceived):
-                    session = self._active_streams_sessions.get(http_event.session_id)
+                    session = self.get_stream_session(http_event.session_id)
 
                     if isinstance(session, WebTransportSessionProtocol):
                         session.handle_webtransport_event(event=http_event)
@@ -390,7 +396,7 @@ class RivenH3(QuicConnectionProtocol):
                 # complete webtransport session handshake before adding it to active streams mapping
                 session.handle_session_start()
                 # add session to active sessions
-                self._active_streams_sessions[event.stream_id] = session
+                self.add_stream_session(stream=session,stream_id=event.stream_id)
                 return
 
             else:
@@ -431,7 +437,7 @@ class RivenH3(QuicConnectionProtocol):
                 if self._disconnected:
                     return
 
-                self._active_streams_sessions[event.stream_id] = stream
+                self.add_stream_session(stream=stream,stream_id=event.stream_id)
                 app = self.config.loaded_application
                 application_task = asyncio.get_event_loop().create_task(
                     stream.run_rcp(app=app)
@@ -529,7 +535,7 @@ class RivenH3(QuicConnectionProtocol):
             if not isinstance(event, (StreamReset, StopSendingReceived)):
                 raise exceptions.InvalidEvent(event)
 
-            stream = self._active_streams_sessions.get(event.stream_id)
+            stream = self.get_stream_session(event.stream_id)
 
             if stream is None:
                 # Stream already closed/reset or unknown stream
