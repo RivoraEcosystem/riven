@@ -17,7 +17,6 @@ from aioquic.h3.events import (
 from rcp import (
     WEBTRANSPORT_EXTENSION,
     RCPApplication,
-    Reader,
     WebTransportBidirectionalStreamEventType,
     WebTransportConnectionEventType,
     WebTransportDatagramEventType,
@@ -26,7 +25,6 @@ from rcp import (
     WebtransportSendEvent,
     WebTransportSessionDisconnect,
     WebTransportUnidirectionalStreamEventType,
-    Writer,
 )
 from rcp.http.events import Headers
 
@@ -387,8 +385,8 @@ class WebTransportSessionProtocol:
         except QueueShutDown:
             if self.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
                 return self.disconnect_event
-
-    async def send(self, event: WebtransportSendEvent) -> None | Writer | tuple[Writer, Reader]:
+    # FIXME: fix the return type for rcp send callable after webtransport stream callables are implemented
+    async def send(self, event: WebtransportSendEvent) -> None:
 
         if self.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
             raise exceptions.ClientDisconnected
@@ -504,7 +502,7 @@ class WebTransportSessionProtocol:
             )
 
             with self._get_or_create_wt_stream(stream_id=stream_id) as stream:
-                return stream.writer
+                ...# FIXME: return receive and send callables
 
         elif event["type"] == WebTransportBidirectionalStreamEventType.SERVER:
             if self.session_state != SessionState.SESSION_ACCEPTED:
@@ -520,7 +518,7 @@ class WebTransportSessionProtocol:
             )
 
             with self._get_or_create_wt_stream(stream_id=stream_id) as stream:
-                return stream.writer, stream.reader
+                ...# FIXME: return receive and send callables
 
         else:
             raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent")
