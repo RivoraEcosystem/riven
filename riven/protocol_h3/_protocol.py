@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.buffer import Buffer
 from aioquic.h3.connection import H3_ALPN, ErrorCode, FrameType
-from aioquic.h3.events import DataReceived, HeadersReceived, WebTransportStreamDataReceived
+from aioquic.h3.events import DatagramReceived, DataReceived, HeadersReceived, WebTransportStreamDataReceived
 from aioquic.quic.events import (
     ConnectionTerminated,
     ProtocolNegotiated,
@@ -106,6 +106,12 @@ class RivenH3(QuicConnectionProtocol):
         # highest value of seen streamID
         self.highest_seen_stream_id: int = 0
 
+    def add_stream_session(self, stream: Stream | WebTransportSessionProtocol, stream_id: int) -> None:
+        self._active_streams_sessions[stream_id] = stream
+
+    def get_stream_session(self, stream_id: int) -> Stream | WebTransportSessionProtocol:
+        return self._active_streams_sessions[stream_id]
+
     def quic_event_received(self, event):
         if isinstance(event, ProtocolNegotiated):
             if event.alpn_protocol == H3_ALPN[0]:  # confirm HTTP3
@@ -128,7 +134,7 @@ class RivenH3(QuicConnectionProtocol):
 
                     self._create_stream(event=http_event)
                 elif isinstance(http_event, DataReceived):
-                    stream = self._active_streams_sessions.get(http_event.stream_id)
+                    stream = self.get_stream_session(http_event.stream_id)
 
                     if isinstance(stream, HTTP3Stream):
                         if stream._closed:
@@ -167,7 +173,7 @@ class RivenH3(QuicConnectionProtocol):
                         )
                         self.remove_stream(http_event.stream_id, self)
                 elif isinstance(http_event, WebTransportStreamDataReceived):
-                    session = self._active_streams_sessions.get(http_event.session_id)
+                    session = self.get_stream_session(http_event.session_id)
 
                     if isinstance(session, WebTransportSessionProtocol):
                         session.handle_webtransport_event(event=http_event)
@@ -198,6 +204,41 @@ class RivenH3(QuicConnectionProtocol):
                             "Failed to handle WebTransportStreamDataReceived event for session %d "
                             "- Invalid Session Type %s (client IP:PORT %s)",
                             http_event.session_id,
+                            type(session).__name__ if session is not None else "None",
+                            self._client_address(),
+                        )
+                        # TODO: session teardown logic after session level error
+                elif isinstance(http_event, DatagramReceived):
+                    session = self.get_stream_session(http_event.stream_id)
+                    if isinstance(session, WebTransportSessionProtocol):
+                        session.handle_webtransport_event(event=http_event)
+                    else:
+                        if can_stop_sending(stream_id=http_event.stream_id):
+                            self._quic.stop_stream(
+                                stream_id=http_event.stream_id,
+                                error_code=encode_app_error(
+                                    code=WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR
+                                ),
+                            )
+
+                        if can_reset_stream(stream_id=http_event.stream_id):
+                            self._quic.reset_stream_at(
+                                stream_id=http_event.stream_id,
+                                error_code=encode_app_error(
+                                    WebTransportApplicationErrorCode.WT_APP_INTERNAL_ERROR
+                                ),
+                                reliable_size=get_webtransport_stream_header_size(
+                                    stream_id=http_event.stream_id, session_id=http_event.session_id
+                                ),
+                            )
+
+                        self.transmit()
+
+                        network_logger.log(
+                            NETWORK_LOG_LEVEL,
+                            "Failed to handle DatagramReceived event for session %d "
+                            "- Invalid Session Type %s (client IP:PORT %s)",
+                            http_event.stream_id,
                             type(session).__name__ if session is not None else "None",
                             self._client_address(),
                         )
@@ -390,7 +431,7 @@ class RivenH3(QuicConnectionProtocol):
                 # complete webtransport session handshake before adding it to active streams mapping
                 session.handle_session_start()
                 # add session to active sessions
-                self._active_streams_sessions[event.stream_id] = session
+                self.add_stream_session(stream=session, stream_id=event.stream_id)
                 return
 
             else:
@@ -431,7 +472,7 @@ class RivenH3(QuicConnectionProtocol):
                 if self._disconnected:
                     return
 
-                self._active_streams_sessions[event.stream_id] = stream
+                self.add_stream_session(stream=stream, stream_id=event.stream_id)
                 app = self.config.loaded_application
                 application_task = asyncio.get_event_loop().create_task(
                     stream.run_rcp(app=app)
@@ -529,7 +570,7 @@ class RivenH3(QuicConnectionProtocol):
             if not isinstance(event, (StreamReset, StopSendingReceived)):
                 raise exceptions.InvalidEvent(event)
 
-            stream = self._active_streams_sessions.get(event.stream_id)
+            stream = self.get_stream_session(event.stream_id)
 
             if stream is None:
                 # Stream already closed/reset or unknown stream
