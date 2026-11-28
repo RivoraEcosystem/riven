@@ -1,32 +1,16 @@
 from __future__ import annotations
 
-import asyncio
-from collections import deque
 from typing import TYPE_CHECKING
 
 from aioquic.quic.connection import (
     stream_is_client_initiated,
     stream_is_unidirectional,
 )
-from rcp import (
-    WebTransportBidirectionalStreamEventType,
-    WebTransportClientBidirectionalStreamStarted,
-    WebTransportClientUnidirectionalStreamStarted,
-    WebTransportDataEventType,
-    WebTransportDataReceived,
-    WebTransportUnidirectionalStreamEventType,
-)
 
 if TYPE_CHECKING:
     from ._session_wt import WebTransportSessionProtocol
 
 from enum import IntEnum
-
-from ..exceptions import exceptions
-from .error import (
-    WebTransportApplicationErrorCode,
-    encode_app_error,
-)
 
 
 class SessionState(IntEnum):
@@ -65,6 +49,7 @@ def can_stop_sending(stream_id: int) -> bool:
 def can_reset_stream(stream_id: int) -> bool:
     """Return True if RESET_STREAM can be sent on the stream."""
     return not (stream_is_client_initiated(stream_id) and stream_is_unidirectional(stream_id))
+
 
 class WebTransportStream:
     _IS_UNIDIRECTIONAL = 1 << 0
@@ -115,10 +100,7 @@ class WebTransportStream:
             For unidirectional streams, the unavailable direction is considered
             closed by default, depending on the stream's initiator.
         """
-        return (
-            self.writing_closed
-            and self.reading_closed
-        )
+        return self.writing_closed and self.reading_closed
 
     @property
     def is_unidirectional(self) -> bool:

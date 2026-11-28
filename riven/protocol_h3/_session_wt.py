@@ -21,7 +21,10 @@ from rcp import (
     WebTransportConnectionEventType,
     WebTransportDatagramEventType,
     WebTransportDatagramReceived,
+    WebTransportDatagramReceiveEvents,
+    WebTransportDatagramSendEvents,
     WebtransportReceiveEvent,
+    WebTransportScope,
     WebtransportSendEvent,
     WebTransportSessionDisconnect,
     WebTransportUnidirectionalStreamEventType,
@@ -97,7 +100,7 @@ class WebTransportSessionProtocol:
         "session_id",
     )
 
-    def __init__(self, protocol: RivenH3, scope: dict):
+    def __init__(self, protocol: RivenH3, scope: WebTransportScope):
 
         self._protocol = protocol
         self._quic = protocol._quic
@@ -105,7 +108,10 @@ class WebTransportSessionProtocol:
         self.config = protocol.config
         self.scope = scope
         self.server_state = protocol.server_state
+
+        # rcp event queues
         self._queue: Queue[WebtransportReceiveEvent] = Queue()
+        self._datagram_queue: Queue[WebTransportDatagramReceiveEvents] = Queue()
 
         self._buffer: bytes = b""
 
@@ -197,7 +203,7 @@ class WebTransportSessionProtocol:
                 "type": WebTransportDatagramEventType.RECEIVED,
                 "data": event.data,
             }
-            self._queue.put_nowait(event)
+            self._datagram_queue.put_nowait(event)
             return
 
     def _wt_stream_created(self, stream_id: int):
@@ -215,7 +221,7 @@ class WebTransportSessionProtocol:
 
         if stream is None:
             stream = WebTransportStream(stream_id=stream_id, session_id=self.session_id, protocol=self)
-            self._protocol.add_stream_session(stream=stream,stream_id=stream_id)
+            self._protocol.add_stream_session(stream=stream, stream_id=stream_id)
             self._wt_stream_created(stream_id)
 
         elif not isinstance(stream, WebTransportStream):
@@ -234,8 +240,10 @@ class WebTransportSessionProtocol:
         Handle the WebTransport Session establishment invoke RCP Application.
         """
 
-        if self.config.application_interface == "asgi":
-            self.scope["extensions"] = WEBTRANSPORT_EXTENSION
+        self.scope["extensions"] = WEBTRANSPORT_EXTENSION
+
+        if self.scope["extensions"]["webtransport"]["features"].get("datagrams"):
+            self.scope["datagram_callables"] = (self.rcp_datagram_receive, self.rcp_datagram_send)
 
         app = self.config.loaded_application
         loop = asyncio.get_running_loop()
@@ -371,7 +379,7 @@ class WebTransportSessionProtocol:
     def send_datagram(self, stream_id: int, data: bytes) -> None:
         self._protocol.send_datagram(stream_id=stream_id, data=data)
 
-    async def receive(self) -> None:
+    async def receive(self) -> WebtransportReceiveEvent:
         if self.rcp_app_state != RCPAppState.RUNNING:
             raise RuntimeError("RCP application exited unexpectedly.")
 
@@ -385,6 +393,7 @@ class WebTransportSessionProtocol:
         except QueueShutDown:
             if self.connect_stream_state != ConnectStreamState.CONNECT_STREAM_OPEN:
                 return self.disconnect_event
+
     # FIXME: fix the return type for rcp send callable after webtransport stream callables are implemented
     async def send(self, event: WebtransportSendEvent) -> None:
 
@@ -472,22 +481,6 @@ class WebTransportSessionProtocol:
             self.session_state = SessionState.SESSION_CLOSED
             return
 
-        elif event["type"] == WebTransportDatagramEventType.SEND:
-            if self.session_state != SessionState.SESSION_ACCEPTED:
-                raise RuntimeError(
-                    f"RCP Violation - Cannot send DATAGRAM. "
-                    f"Session must be ACCEPTED before sending "
-                    f"(current state: {self.session_state!r})"
-                )
-
-            data = event["data"]
-
-            if not isinstance(data, bytes):
-                raise exceptions.InvalidEventField(field="data", got=type(data), expected=bytes)
-
-            self.send_datagram(stream_id=self.session_id, data=data)
-            return
-
         elif event["type"] == WebTransportUnidirectionalStreamEventType.SERVER:
             if self.session_state != SessionState.SESSION_ACCEPTED:
                 raise RuntimeError(
@@ -502,7 +495,7 @@ class WebTransportSessionProtocol:
             )
 
             with self._get_or_create_wt_stream(stream_id=stream_id) as stream:
-                ...# FIXME: return receive and send callables
+                ...  # FIXME: return receive and send callables
 
         elif event["type"] == WebTransportBidirectionalStreamEventType.SERVER:
             if self.session_state != SessionState.SESSION_ACCEPTED:
@@ -517,8 +510,33 @@ class WebTransportSessionProtocol:
                 is_unidirectional=False,
             )
 
-            with self._get_or_create_wt_stream(stream_id=stream_id) as stream:
-                ...# FIXME: return receive and send callables
+            with self._get_or_create_wt_stream(stream_id=stream_id) as stream:  # noqa: F841
+                ...  # FIXME: return receive and send callables
 
         else:
             raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent")
+
+    async def rcp_datagram_receive(self) -> WebTransportDatagramReceiveEvents:
+        if self.rcp_app_state != RCPAppState.RUNNING:
+            raise RuntimeError("RCP application exited unexpectedly.")
+
+        event = await self._datagram_queue.get()
+        return event
+
+    async def rcp_datagram_send(self, event: WebTransportDatagramSendEvents) -> None:
+
+        if event["type"] != WebTransportDatagramEventType.SEND:
+            raise RuntimeError(f"RCP Violation - Unexpected {event['type']!r} event sent for datagram")
+        if self.session_state != SessionState.SESSION_ACCEPTED:
+            raise RuntimeError(
+                f"RCP Violation - Cannot send DATAGRAM. "
+                f"Session must be ACCEPTED before sending "
+                f"(current state: {self.session_state!r})"
+            )
+
+        data = event["data"]
+
+        if not isinstance(data, bytes):
+            raise exceptions.InvalidEventField(field="data", got=type(data), expected=bytes)
+
+        self.send_datagram(stream_id=self.session_id, data=data)
